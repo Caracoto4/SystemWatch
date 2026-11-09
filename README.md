@@ -1,34 +1,49 @@
 # SystemWatch
 
-**Portable Windows diagnostics. Clear results. No automatic repairs.**
+<p align="center">
+  <strong>Portable Windows diagnostics. Clear results. No automatic repairs.</strong>
+</p>
 
-SystemWatch is an interactive terminal application for inspecting a Windows PC, understanding potential problems, and collecting useful diagnostic information — without silently changing system settings.
+<p align="center">
+  <a href="README.md"><img alt="English" src="https://img.shields.io/badge/English-1F6FEB?style=for-the-badge"></a>
+  <a href="README.ru.md"><img alt="Русский" src="https://img.shields.io/badge/Русский-555555?style=for-the-badge"></a>
+</p>
 
-## What works today
+<p align="center">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows">
+  <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square&logo=rust">
+  <img alt="Interface" src="https://img.shields.io/badge/interface-terminal-20232A?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
+  <img alt="Status" src="https://img.shields.io/badge/status-early%20preview-yellow?style=flat-square">
+</p>
 
-The early preview (0.1.0) currently provides:
+SystemWatch is a read-only Windows diagnostic tool with an interactive terminal interface. It gathers useful system information, checks selected Windows components, and creates a detailed local report — without automatically changing your PC.
 
-- **System overview:** computer name, full Windows version and kernel, CPU model, physical/logical core counts, reported CPU frequency, live memory use, system uptime, processor architecture and mounted-volume capacity/free space.
-- **Storage inventory:** mounted volumes, filesystem types, used and total capacity.
-- **Device diagnostics:** checks Plug and Play devices for reported Device Manager problem codes.
-- **Microsoft Defender:** reads the real-time protection status.
-- **Windows Firewall:** checks whether the returned firewall profiles are enabled.
-- **Windows Services:** flags only stopped automatic services that also report a non-zero exit code; trigger-start services are not treated as failures.
-- **Detailed scan logs:** creates a timestamped log file beside the running executable after each completed scan.
-  Logs stay local and may contain the computer name, OS details, and device or service names. Review a log before sharing it.
-- **Windows Event Log:** counts Critical and Error events in the System and Application logs over the last 24 hours (sample capped at 501 per log; event message text is not displayed).
-- **Physical disk health:** reads Windows Storage health and operational status for detected physical disks, and displays temperature/wear telemetry only when the device exposes it. Unsupported or unavailable health data is reported as unavailable rather than assumed healthy.
-- **Interactive terminal UI:** four sections, live inventory refresh, and a manual diagnostics scan. The Diagnostics view presents a compact status summary, color-coded check results, per-check timing, scan elapsed time and report-save status.
+<p align="center">
+  <img src="preview.png" alt="SystemWatch terminal interface" width="850">
+</p>
 
-The diagnostics section runs in the background, so the terminal interface remains responsive. While a scan runs, the view shows an elapsed-time indicator without inventing a percentage. Completed scans show status totals and a scoped overall assessment. PowerShell output is decoded as UTF-8 for readable error messages. It reports each check as **HEALTHY**, **WARNING**, **CRITICAL**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
+## Highlights
 
-## Preview
+- **System overview** — Windows version and kernel, CPU model and cores, memory usage, uptime, architecture, and storage capacity.
+- **Device diagnostics** — detects Plug and Play devices reporting Device Manager problem codes.
+- **Microsoft Defender** — displays real-time protection status.
+- **Windows Firewall** — checks the enabled state of available firewall profiles.
+- **Windows Services** — flags a conservative set of stopped automatic services with non-zero exit codes.
+- **Event Log** — counts Critical and Error events in the System and Application logs over the last 24 hours.
+- **Physical disk health** — reads Windows storage health and operational status, plus telemetry when the device exposes it.
+- **Detailed scan reports** — saves a timestamped log beside the executable, including system inventory, findings, status totals, and check timings.
+- **Responsive terminal UI** — navigate sections, refresh inventory, and run diagnostics while the interface remains responsive.
 
-![SystemWatch terminal interface](preview.png)
+## Safety and privacy
 
-## Run
+**SystemWatch is read-only by design.** It does not automatically repair Windows, change security settings, delete files, or stop services. A failed or unsupported query is reported as `UNAVAILABLE`, never silently treated as healthy.
 
-A packaged public release is not published yet. To build from source:
+Scan logs stay on your computer. They can contain your computer/account name, hardware identifiers, device and service names, and event metadata. Review a report before sharing it.
+
+## Get started
+
+A packaged release is not available yet. You can build the project from source:
 
 ```powershell
 git clone https://github.com/Caracoto4/SystemWatch.git
@@ -36,58 +51,44 @@ cd SystemWatch
 cargo run
 ```
 
-Requirements for building: Rust toolchain and Cargo. The exact supported Windows versions are still being tested.
+**Requirements:** Windows, Rust toolchain, and Cargo. Supported Windows versions are still being validated.
 
-## Keyboard controls
+## Keyboard shortcuts
 
 | Key | Action |
-|---|---|
+|:---:|---|
 | `1`–`4` | Open a section |
 | `←` / `→` or `Tab` | Switch sections |
-| `R` | Refresh live inventory |
-| `S` | Run diagnostics (Diagnostics section) |
+| `R` | Refresh system inventory |
+| `S` | Run diagnostics in the Diagnostics section |
 | `Q` or `Esc` | Quit |
 
-## Safety first
+## Diagnostic result states
 
-SystemWatch is designed to be **read-only by default**.
+| Status | Meaning |
+|---|---|
+| `HEALTHY` | The check completed and did not report an issue within its scope. |
+| `WARNING` | The check found something worth reviewing. |
+| `CRITICAL` | The check reported a critical condition. |
+| `UNAVAILABLE` | The check could not obtain reliable data. |
 
-- It does not automatically repair Windows or modify system settings.
-- It does not delete files, stop services, or change security configuration.
-- It does not label a PC or process as malicious based on guesswork.
-- Checks that cannot run are shown as unavailable, not healthy.
+A clean result is not a guarantee that the entire PC is healthy; it only describes the checks that were available and run.
 
-Some future diagnostics may require administrator permissions. The app will explain when a check is unavailable and why.
+## Roadmap
 
-## Planned diagnostics
+- Windows integrity and servicing diagnostics
+- Deeper SMART and filesystem checks
+- Network adapter, DNS, route, and connectivity diagnostics
+- WHEA and hardware sensor information
+- Expanded driver inventory
+- JSON and HTML report export
 
-- Windows integrity and servicing state
-- Deeper SMART attributes and filesystem integrity information
-- Deeper event-log analysis
-- Network adapters, DNS, routes and connectivity
-- Hardware sensor and WHEA indicators
-- Detailed driver inventory
-- JSON and HTML diagnostic reports
+## Project
 
-The exact Windows versions supported will be documented after compatibility testing. Older Windows versions are not claimed as supported yet.
+SystemWatch is an early preview and is under active development. Features are added incrementally and documented as they become available.
 
-## Project status
-
-SystemWatch is under active development. This preview is an initial diagnostic toolkit, not a complete PC health scanner. Features are added incrementally and tested before being marked as available.
-
-- **Language:** Rust
-- **Interface:** Ratatui terminal UI
+- **Language:** Rust 2021
+- **Terminal UI:** Ratatui + Crossterm
 - **License:** MIT
 
-Contributions, bug reports and feature suggestions are welcome.
-
-## Detailed scan reports
-
-After each completed scan, SystemWatch saves a detailed local log beside the running executable. The report begins with system information (Windows build, computer model, CPU, RAM modules, BIOS, motherboard, graphics adapters and drivers, fixed volumes and hardware network adapters), followed by a result section for every diagnostic check.
-
-Each check includes its status, source, summary and detailed findings returned by Windows. The report includes an overall assessment, a concise attention list, status totals, total scan duration, and the duration of each individual check. Unsupported or failed queries remain explicitly marked as unavailable.
-
-Reports may contain the current Windows account name, computer name, hardware identifiers, device and service names, and event metadata. Review the file before sharing it.
-## Application icon
-
-The Windows executable embeds the project's supplied artwork as its application icon. The multi-resolution icon resource is compiled into Windows builds when the Windows SDK resource compiler is available; otherwise the build continues with the default executable icon. The terminal UI itself remains text-based.
+Bug reports, contributions, and feature suggestions are welcome.
