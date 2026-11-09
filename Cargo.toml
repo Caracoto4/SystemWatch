@@ -1,0 +1,20 @@
+[package]
+name = "systemwatch"
+version = "0.1.0"
+edition = "2021"
+description = "Portable, read-only Windows diagnostics in an interactive terminal"
+license = "MIT"
+
+[dependencies]
+crossterm = "0.28"
+ratatui = "0.29"
+sysinfo = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
