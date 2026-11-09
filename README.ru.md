@@ -14,7 +14,7 @@
   <img alt="Язык" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square&logo=rust">
   <img alt="Интерфейс" src="https://img.shields.io/badge/interface-terminal-20232A?style=flat-square">
   <img alt="Лицензия" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-  <img alt="Статус" src="https://img.shields.io/badge/status-ранняя%20версия-yellow?style=flat-square">
+  <a href="https://github.com/Caracoto4/SystemWatch/releases/tag/v0.1.0"><img alt="Последний релиз v0.1.0" src="https://img.shields.io/badge/release-v0.1.0-brightgreen?style=flat-square"></a>
 </p>
 
 SystemWatch — диагностическая утилита Windows с интерактивным интерфейсом в терминале. Она собирает сведения о системе, проверяет отдельные компоненты Windows и формирует подробный локальный отчёт, не изменяя настройки компьютера автоматически.
@@ -43,15 +43,22 @@ SystemWatch — диагностическая утилита Windows с инт�
 
 ## Запуск
 
-Готовый установщик или публичный релиз пока не опубликован. Проект можно собрать из исходного кода:
+Доступна первая публичная версия:
 
-```powershell
-git clone https://github.com/Caracoto4/SystemWatch.git
-cd SystemWatch
-cargo run
-```
+- **[Скачать SystemWatch v0.1.0 (Windows x64)](https://github.com/Caracoto4/SystemWatch/releases/download/v0.1.0/SystemWatch_v0.1.0.exe)**
+- [Страница релиза, описание и контрольная сумма](https://github.com/Caracoto4/SystemWatch/releases/tag/v0.1.0)
 
-**Требования:** Windows, установленный Rust toolchain и Cargo. Совместимость с конкретными версиями Windows пока проверяется.
+Это портативный EXE-файл — установка не требуется. Сохраните SystemWatch_v0.1.0.exe и запустите его в Windows x64. Подробный лог сканирования сохраняется рядом с исполняемым файлом.
+
+**Конфиденциальность:** логи могут содержать имя компьютера и учётной записи, сведения об оборудовании, устройствах, службах и системных событиях. Проверяйте лог перед отправкой другим людям.
+
+### Сборка из исходного кода
+
+    git clone https://github.com/Caracoto4/SystemWatch.git
+    cd SystemWatch
+    cargo run
+
+**Требования для сборки:** Windows, установленный Rust toolchain и Cargo. Совместимость с разными версиями и конфигурациями Windows продолжает проверяться.
 
 ## Управление
 
@@ -85,7 +92,7 @@ cargo run
 
 ## О проекте
 
-SystemWatch находится на ранней стадии разработки. Новые возможности добавляются постепенно и документируются по мере реализации.
+SystemWatch v0.1.0 — первый публичный релиз проекта. Разработка продолжается: функциональность и совместимость расширяются и документируются по мере развития.
 
 - **Язык:** Rust 2021
 - **Терминальный интерфейс:** Ratatui + Crossterm

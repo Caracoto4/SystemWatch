@@ -14,7 +14,7 @@
   <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square&logo=rust">
   <img alt="Interface" src="https://img.shields.io/badge/interface-terminal-20232A?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
-  <img alt="Status" src="https://img.shields.io/badge/status-early%20preview-yellow?style=flat-square">
+  <a href="https://github.com/Caracoto4/SystemWatch/releases/tag/v0.1.0"><img alt="Latest release v0.1.0" src="https://img.shields.io/badge/release-v0.1.0-brightgreen?style=flat-square"></a>
 </p>
 
 SystemWatch is a read-only Windows diagnostic tool with an interactive terminal interface. It gathers useful system information, checks selected Windows components, and creates a detailed local report — without automatically changing your PC.
@@ -43,15 +43,22 @@ Scan logs stay on your computer. They can contain your computer/account name, ha
 
 ## Get started
 
-A packaged release is not available yet. You can build the project from source:
+The first public release is available:
 
-```powershell
-git clone https://github.com/Caracoto4/SystemWatch.git
-cd SystemWatch
-cargo run
-```
+- **[Download SystemWatch v0.1.0 (Windows x64)](https://github.com/Caracoto4/SystemWatch/releases/download/v0.1.0/SystemWatch_v0.1.0.exe)**
+- [View release details and checksums](https://github.com/Caracoto4/SystemWatch/releases/tag/v0.1.0)
 
-**Requirements:** Windows, Rust toolchain, and Cargo. Supported Windows versions are still being validated.
+The release is a portable executable; no installer is required. Save SystemWatch_v0.1.0.exe and run it on a Windows x64 system. A detailed scan log is saved beside the executable.
+
+**Privacy note:** scan logs may contain identifying computer, account, hardware, device, service, and event metadata. Review a log before sharing it.
+
+### Build from source
+
+    git clone https://github.com/Caracoto4/SystemWatch.git
+    cd SystemWatch
+    cargo run
+
+**Build requirements:** Windows, Rust toolchain, and Cargo. Compatibility across Windows versions and configurations is still being validated.
 
 ## Keyboard shortcuts
 
@@ -85,7 +92,7 @@ A clean result is not a guarantee that the entire PC is healthy; it only describ
 
 ## Project
 
-SystemWatch is an early preview and is under active development. Features are added incrementally and documented as they become available.
+SystemWatch v0.1.0 is the first public release. The project remains under active development; features and compatibility are expanded and documented incrementally.
 
 - **Language:** Rust 2021
 - **Terminal UI:** Ratatui + Crossterm
