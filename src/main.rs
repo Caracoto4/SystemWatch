@@ -21,6 +21,7 @@ struct CheckResult {
     status: String,
     detail: String,
     evidence: Vec<String>,
+    duration_ms: u64,
 }
 
 struct App {
@@ -105,6 +106,7 @@ impl App {
                 status: "UNAVAILABLE".into(),
                 detail: format!("Could not start background scan: {error}"),
                 evidence: Vec::new(),
+                duration_ms: 0,
             }];
         }
     }
@@ -138,6 +140,7 @@ impl App {
                     status: "UNAVAILABLE".into(),
                     detail: "The background scan ended without returning results.".into(),
                     evidence: Vec::new(),
+                    duration_ms: 0,
                 }];
                 self.scan_running = false;
                 self.scan_receiver = None;
@@ -168,6 +171,7 @@ fn parse_check_line(name: &str, line: &str) -> CheckResult {
             status: "UNAVAILABLE".into(),
             detail: "The check returned an unrecognized status format.".into(),
             evidence: Vec::new(),
+            duration_ms: 0,
         };
     }
     CheckResult {
@@ -175,16 +179,18 @@ fn parse_check_line(name: &str, line: &str) -> CheckResult {
         status,
         detail: if message.is_empty() { detail } else { format!("{detail} — {message}") },
         evidence: Vec::new(),
+        duration_ms: 0,
     }
 }
 
 fn powershell_check(name: &str, script: &str) -> CheckResult {
+    let started = Instant::now();
     let utf8_script = format!("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; {script}");
     let output = Command::new("powershell.exe")
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &utf8_script])
         .output();
 
-    match output {
+    let mut check = match output {
         Ok(result) if result.status.success() => {
             let stdout = String::from_utf8_lossy(&result.stdout);
             let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
@@ -201,16 +207,19 @@ fn powershell_check(name: &str, script: &str) -> CheckResult {
                 if message.is_empty() { "PowerShell check failed without an error message.".to_string() } else { message }
             },
             evidence: Vec::new(),
+            duration_ms: 0,
         },
         Err(error) => CheckResult {
             name: name.to_string(),
             status: "UNAVAILABLE".into(),
             detail: format!("Could not start PowerShell: {error}"),
             evidence: Vec::new(),
+            duration_ms: 0,
         },
-    }
+    };
+    check.duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    check
 }
-
 fn run_windows_checks() -> Vec<CheckResult> {
     let devices = r#"$ErrorActionPreference='Stop'; try { $bad=@(Get-CimInstance -ClassName Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 }); if($bad.Count -eq 0){ 'HEALTHY|No device problem codes reported|Device Manager inventory' } else { 'WARNING|{0} device(s) report a problem code|See detailed findings' -f $bad.Count }; ('PnP devices enumerated: {0}' -f (@(Get-CimInstance Win32_PnPEntity)).Count); foreach($d in ($bad | Select-Object -First 100)){ 'Problem device: {0}; code={1}; status={2}; class={3}' -f $d.Name,$d.ConfigManagerErrorCode,$d.Status,$d.PNPClass } } catch { 'UNAVAILABLE|Device inventory query failed|' + $_.Exception.Message }"#;
     let defender = r#"$ErrorActionPreference='Stop'; try { $s=Get-MpComputerStatus; if($s.RealTimeProtectionEnabled){ 'HEALTHY|Real-time protection is enabled|Microsoft Defender status' } else { 'WARNING|Real-time protection is reported disabled|Microsoft Defender status' }; foreach($k in @('AMServiceEnabled','AntivirusEnabled','AntispywareEnabled','BehaviorMonitorEnabled','IoavProtectionEnabled','NISEnabled','RealTimeProtectionEnabled','OnAccessProtectionEnabled','QuickScanAge','FullScanAge','AntivirusSignatureVersion','AntivirusSignatureLastUpdated','AMEngineVersion','ComputerState')){ $v=$s.$k; if($null -ne $v){ '{0}: {1}' -f $k,$v } } } catch { 'UNAVAILABLE|Defender status could not be read|' + $_.Exception.Message }"#;
@@ -301,10 +310,18 @@ fn write_scan_log(
     writeln!(&mut report, "Finished: {}", finished_at.format("%Y-%m-%d %H:%M:%S%.3f %:z"))?;
     writeln!(&mut report, "Duration: {} ms", duration.num_milliseconds())?;
     writeln!(&mut report, "Checks completed: {}", checks.len())?;
-    writeln!(
-        &mut report,
-        "Summary: {healthy} healthy, {warning} warning, {critical} critical, {unavailable} unavailable"
-    )?;
+    let overall = if critical > 0 { "ATTENTION REQUIRED" } else if warning > 0 { "REVIEW RECOMMENDED" } else if unavailable > 0 { "PARTIAL RESULTS" } else { "NO ISSUES DETECTED BY AVAILABLE CHECKS" };
+    writeln!(&mut report, "Overall assessment: {overall}")?;
+    writeln!(&mut report, "Summary: {healthy} healthy, {warning} warning, {critical} critical, {unavailable} unavailable")?;
+    let attention: Vec<&CheckResult> = checks.iter().filter(|check| check.status != "HEALTHY").collect();
+    if attention.is_empty() {
+        writeln!(&mut report, "Items requiring attention: none reported by these checks")?;
+    } else {
+        writeln!(&mut report, "Items requiring attention:")?;
+        for check in attention {
+            writeln!(&mut report, "  - [{}] {}: {}", check.status, check.name, check.detail)?;
+        }
+    }
     writeln!(&mut report, "")?;
     for (index, check) in checks.iter().enumerate() {
         let source = match check.name.as_str() {
@@ -319,6 +336,7 @@ fn write_scan_log(
         writeln!(&mut report, "{}. [{}] {}", index + 1, check.status, check.name)?;
         writeln!(&mut report, "   Source: {source}")?;
         writeln!(&mut report, "   Result: {}", check.detail)?;
+        writeln!(&mut report, "   Duration: {} ms", check.duration_ms)?;
         if !check.evidence.is_empty() {
             writeln!(&mut report, "   Detailed findings:")?;
             for item in &check.evidence {
@@ -512,6 +530,7 @@ fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(check.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
             ]));
             lines.push(Line::from(format!("  {}", check.detail)));
+            lines.push(Line::from(format!("  Duration: {} ms", check.duration_ms)));
             lines.push(Line::from(""));
         }
         if let Some(done) = app.scan_completed {
@@ -632,6 +651,7 @@ mod tests {
             status: "HEALTHY".into(),
             detail: "Test result".into(),
             evidence: vec!["Additional measured detail".into()],
+            duration_ms: 42,
         }];
         let path = write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks)
             .expect("scan log should be written");
@@ -644,6 +664,9 @@ mod tests {
         assert!(contents.contains("Additional measured detail"));
         assert!(contents.contains("Source: Internal diagnostic result"));
         assert!(contents.contains("Detailed findings:"));
+        assert!(contents.contains("Overall assessment:"));
+        assert!(contents.contains("Items requiring attention:"));
+        assert!(contents.contains("Duration: 42 ms"));
         assert!(write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks).is_err());
         fs::remove_file(path).expect("test scan log should be removed");
     }

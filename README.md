@@ -85,6 +85,6 @@ Contributions, bug reports and feature suggestions are welcome.
 
 After each completed scan, SystemWatch saves a detailed local log beside the running executable. The report begins with system information (Windows build, computer model, CPU, RAM modules, BIOS, motherboard, graphics adapters and drivers, fixed volumes and hardware network adapters), followed by a result section for every diagnostic check.
 
-Each check includes its status, source, summary and detailed findings returned by Windows. The report also records scan timestamps, duration and status totals. Unsupported or failed queries remain explicitly marked as unavailable.
+Each check includes its status, source, summary and detailed findings returned by Windows. The report includes an overall assessment, a concise attention list, status totals, total scan duration, and the duration of each individual check. Unsupported or failed queries remain explicitly marked as unavailable.
 
 Reports may contain the current Windows account name, computer name, hardware identifiers, device and service names, and event metadata. Review the file before sharing it.

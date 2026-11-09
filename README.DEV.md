@@ -72,3 +72,12 @@ Never forget the GitHub synchronization step. If authentication/network prevents
 - No full SMART attribute interpretation, WHEA analysis, filesystem integrity scan, network diagnostics or JSON/HTML export yet.
 - rustfmt may not be installed on the development toolchain; check before using cargo fmt --check.
 - Validate the new report on the actual PC by running a scan in the TUI and reviewing the generated log.
+## Current work: professional MVP report presentation
+
+- Each Windows diagnostic check now records its own elapsed execution time using a monotonic clock.
+- The Diagnostics screen displays the duration beneath each result.
+- The log header now includes a concise overall assessment: attention required, review recommended, partial results, or no issues detected by available checks.
+- The report includes an explicit attention list for WARNING, CRITICAL and UNAVAILABLE checks, followed by the full per-check evidence.
+- Each individual check records its duration in milliseconds alongside source and result.
+- The wording is deliberately scoped: a clean summary means only that the available checks did not report an issue; it is not a guarantee that the PC is healthy.
+- Tests assert that overall assessment, attention list and per-check timing are present in the generated report.
