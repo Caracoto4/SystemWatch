@@ -1,77 +1,91 @@
 # SystemWatch
 
-Portable Windows system diagnostics with an interactive terminal interface.
+**Portable Windows diagnostics. Clear results. No automatic repairs.**
 
-> Status: early development / project bootstrap
+SystemWatch is an interactive terminal application for inspecting a Windows PC, understanding potential problems, and collecting useful diagnostic information — without silently changing system settings.
 
-SystemWatch aims to inspect as much of a Windows computer as can be checked safely and reliably, explain detected issues, and produce useful diagnostic reports. It is designed to run from a folder or removable drive without installation.
+<pre>
+┌──────────────────────────────────────────────────────────────┐
+│  SYSTEMWATCH     1: Overview   2: Diagnostics   3: Storage   │
+│                                                              │
+│  System                                                       │
+│  Host: YOUR-PC                                                │
+│  OS: Windows 11                                               │
+│                                                              │
+│  CPU average   ███████░░░░░░░░░░░░  34%                       │
+│  Memory        ███████████░░░░░░░  56%                        │
+│                                                              │
+│  Notes                                                        │
+│  Live inventory is informational — not a full health verdict.│
+└──────────────────────────────────────────────────────────────┘
+</pre>
+<sub>Illustrative layout preview; actual values come from the computer being scanned.</sub>
 
-## Goals
-- Portable executable; no mandatory installer.
-- Interactive terminal UI with keyboard navigation and clear progress.
-- Broad diagnostics across Windows, hardware, storage, drivers, services, processes, networking, security configuration, and event logs.
-- Explain findings in plain language, distinguish confirmed faults from warnings and unavailable checks.
-- Export reports in JSON and HTML.
-- Work offline for core checks.
-- Support multiple Windows generations where technically feasible, with compatibility tested per release.
-- Modular architecture so diagnostic checks can be added independently.
+## What works today
 
-## Safety principles
-- Read-only by default: scanning must not change system configuration.
-- Never delete files, stop services, edit the registry, repair filesystems, or alter security settings automatically.
-- Any future repair action must be explicit, separately described, and confirmed by the operator.
-- Do not label a condition as a fault without evidence; show the source and limitations of each finding.
-- Avoid collecting or exporting personal data that is not needed for diagnostics.
+This is an early preview (0.1.0). The current build can:
 
-## Planned technology
-- Rust
-- Ratatui for the terminal interface
-- Crossterm for terminal input and rendering
-- sysinfo for system/process metrics
-- Windows APIs and native command-line tools for Windows-specific diagnostics
-- Serde for structured data and JSON reports
-- HTML and JSON report exporters
+- Show Windows name, version, kernel version, and computer name.
+- Display live average CPU utilization and physical memory usage.
+- List mounted volumes, filesystem types, and volume capacities.
+- Refresh system inventory automatically and on demand.
+- Navigate a compact terminal interface using the keyboard.
 
-Exact dependency versions and the minimum supported Windows version will be decided during implementation and compatibility testing.
+More diagnostic modules are planned. The interface clearly marks checks that are not implemented yet.
 
-## Diagnostic areas
-| Area | Planned checks |
+## Run
+
+1. Download the latest release executable when a release is published.
+2. Open Windows Terminal or PowerShell.
+3. Run `systemwatch.exe`.
+
+For now, developers can build it from source:
+
+```powershell
+git clone https://github.com/Caracoto4/SystemWatch.git
+cd SystemWatch
+cargo run
+```
+
+## Keyboard controls
+
+| Key | Action |
 |---|---|
-| System overview | Windows edition/build, uptime, CPU, memory, hardware inventory |
-| Hardware | Device status, available temperature/health sensors, hardware error indicators |
-| Storage | Disk inventory, free space, supported SMART/health data, filesystem status |
-| Windows integrity | System component and protected-file checks, servicing state |
-| Drivers & devices | Driver metadata, device-manager problem codes |
-| Services | Service state, failed starts, relevant configuration |
-| Processes | Resource usage, responsiveness indicators, unusual resource consumption |
-| Network | Adapters, addressing, DNS, routes, connectivity and latency |
-| Security | Defender and Firewall status, selected security configuration |
-| Event logs | Relevant system/application warnings and errors |
-| Performance | Resource pressure and evidence-backed bottleneck indicators |
+| `1`–`4` | Open a section |
+| `←` / `→` or `Tab` | Switch sections |
+| `R` | Refresh inventory |
+| `Q` or `Esc` | Quit |
 
-Not every check is available on every Windows version or hardware configuration. Unsupported and permission-restricted checks must be reported as such, not as successful.
+## Safety first
 
-## Result severity
-- **Critical** — strong evidence of an urgent fault or risk.
-- **Warning** — a condition worth investigating; not necessarily a failure.
-- **Info** — useful context or a recommendation.
-- **Healthy** — the check completed and found no issue within its scope.
-- **Unavailable** — unsupported, inaccessible, or not applicable.
+SystemWatch is designed to be **read-only by default**.
 
-## Development roadmap
-1. Bootstrap the Rust project and define module boundaries.
-2. Build the interactive terminal shell and navigation.
-3. Implement system inventory and live resource overview.
-4. Add read-only diagnostic modules incrementally.
-5. Add event-log correlation and evidence-based explanations.
-6. Add JSON and HTML report export.
-7. Test on supported Windows versions and hardware configurations.
-8. Package and verify portable releases.
+- It does not automatically repair Windows or modify system settings.
+- It does not delete files, stop services, or change security configuration.
+- It distinguishes confirmed findings from warnings and unavailable checks.
+- A check that could not run is never presented as a successful check.
 
-## Development environment
-Intended local working directory: C:\\projects\\SystemWatch
+Some future diagnostics may require administrator permissions. The app will explain when a check is unavailable and why.
 
-The repository is the source of truth for project documentation and code. Keep this README updated whenever architecture, compatibility, safety behavior, or roadmap status changes.
+## Planned diagnostics
 
-## Current status
-The repository has been created and the initial project documentation is in place. Implementation has not yet been bootstrapped. The development computer must be reachable before local environment inspection, building, and runtime testing can be performed.
+- Windows integrity and servicing state
+- Hardware and device health indicators
+- Driver and Device Manager problem codes
+- Disk health and filesystem information
+- Windows services and relevant event logs
+- Network adapters, DNS, routes, and connectivity
+- Microsoft Defender and Windows Firewall status
+- JSON and HTML diagnostic reports
+
+The exact Windows versions supported will be documented after compatibility testing. Older Windows versions are not claimed as supported yet.
+
+## Project status
+
+SystemWatch is under active development. The current preview is an inventory dashboard, not a complete PC health scanner. Features will be added incrementally and tested before being marked as available.
+
+- **Language:** Rust
+- **Interface:** Ratatui terminal UI
+- **License:** MIT
+
+Contributions, bug reports, and feature suggestions are welcome.
