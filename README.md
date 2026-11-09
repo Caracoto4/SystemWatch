@@ -17,6 +17,7 @@ The early preview (0.1.0) currently provides:
 - **Detailed scan logs:** creates a timestamped log file beside the running executable after each completed scan.
   Logs stay local and may contain the computer name, OS details, and device or service names. Review a log before sharing it.
 - **Windows Event Log:** counts Critical and Error events in the System and Application logs over the last 24 hours (sample capped at 501 per log; event message text is not displayed).
+- **Physical disk health:** reads Windows Storage health and operational status for detected physical disks, and displays temperature/wear telemetry only when the device exposes it. Unsupported or unavailable health data is reported as unavailable rather than assumed healthy.
 - **Interactive terminal UI:** four sections, live inventory refresh, and a manual diagnostics scan.
 
 The diagnostics section runs in the background, so the terminal interface remains responsive. PowerShell output is decoded as UTF-8 for readable error messages. It reports each check as **HEALTHY**, **WARNING**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
@@ -61,7 +62,7 @@ Some future diagnostics may require administrator permissions. The app will expl
 ## Planned diagnostics
 
 - Windows integrity and servicing state
-- Disk health, SMART indicators and filesystem information
+- Deeper SMART attributes and filesystem integrity information
 - Deeper event-log analysis
 - Network adapters, DNS, routes and connectivity
 - Hardware sensor and WHEA indicators
@@ -79,3 +80,11 @@ SystemWatch is under active development. This preview is an initial diagnostic t
 - **License:** MIT
 
 Contributions, bug reports and feature suggestions are welcome.
+
+## Detailed scan reports
+
+After each completed scan, SystemWatch saves a detailed local log beside the running executable. The report begins with system information (Windows build, computer model, CPU, RAM modules, BIOS, motherboard, graphics adapters and drivers, fixed volumes and hardware network adapters), followed by a result section for every diagnostic check.
+
+Each check includes its status, source, summary and detailed findings returned by Windows. The report also records scan timestamps, duration and status totals. Unsupported or failed queries remain explicitly marked as unavailable.
+
+Reports may contain the current Windows account name, computer name, hardware identifiers, device and service names, and event metadata. Review the file before sharing it.

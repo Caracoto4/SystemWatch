@@ -1,160 +1,74 @@
-# SystemWatch — внутренняя документация разработки
+# SystemWatch - Developer Notes
 
-Этот файл — подробная рабочая память проекта. Пользовательский README.md предназначен для пользователей; здесь фиксируются архитектура, технические решения, ограничения, команды, тесты и следующие задачи.
+This file is the project's engineering memory. Update it whenever implementation, architecture, verification results, or project workflow changes. Keep README.md user-facing and this file technical.
 
-## 1. Цель и обязательные принципы
+## Project and environment
 
-SystemWatch — portable-инструмент диагностики Windows с интерактивным TUI. Главный принцип: собирать проверяемые факты, объяснять их и не выдавать предположения за неисправности.
+- Local working directory: C:\projects\SystemWatch
+- GitHub: https://github.com/Caracoto4/SystemWatch
+- Primary branch: main
+- Rust 2021, Ratatui, Crossterm, sysinfo, chrono, anyhow.
+- Windows diagnostics use read-only PowerShell/CIM/Storage commands.
+- Current source is primarily in src/main.rs.
 
-- По умолчанию только чтение.
-- Не чинить систему автоматически.
-- Не удалять/перемещать файлы, не менять реестр, службы, брандмауэр или настройки Defender.
-- Не выполнять DISM/SFC с параметрами восстановления автоматически.
-- Не объявлять процесс вирусом только по имени или высокой нагрузке.
-- Недоступные проверки получают Unavailable, а не Healthy.
-- Не экспортировать лишние персональные данные.
-- Каждая диагностика должна сообщать источник данных, время, ограничения и результат.
+## Non-negotiable principles
 
-## 2. Среда разработки (2026-11-09)
+- Read-only diagnostics; never perform automatic repairs.
+- A failed or unsupported query is UNAVAILABLE, not HEALTHY.
+- Do not infer a fault from an unfamiliar process name or a single metric.
+- Reports should distinguish measured facts, warnings, unavailable data and interpretation.
+- Protect privacy: logs are local and may contain account, machine, hardware, device, service and event metadata.
 
-- Рабочая папка: `C:\projects\SystemWatch`
-- ОС разработки: Windows 11 Home, build 26200.
-- Rust: `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
-- Cargo: `1.99.1 (5f94df478 2026-08-27)`
-- Git: `2.55.0.windows.5`
-- GitHub: `Caracoto4/SystemWatch`, ветка `main`.
-- ПК подключён через Termalin.
-- Репозиторий локально клонирован; `target/` исключён через .gitignore.
+## Current diagnostic checks
 
-## 3. Стек
+1. Devices and drivers: Win32_PnPEntity and ConfigManagerErrorCode; report affected device details.
+2. Microsoft Defender: Get-MpComputerStatus; real-time protection and available protection/scan/signature fields.
+3. Windows Firewall: Get-NetFirewallProfile; enabled state and inbound/outbound defaults for each profile.
+4. Windows Services: conservative warning condition for stopped automatic services with non-zero exit codes; report details.
+5. Windows Event Log: System and Application Critical/Error events in the last 24 hours; bounded samples include time, level, event ID, provider and record ID. Raw event message text is intentionally excluded.
+6. Physical disk health: Get-PhysicalDisk; HealthStatus, OperationalStatus, optional Get-StorageReliabilityCounter telemetry.
 
-- Rust 2021.
-- Ratatui 0.29 — TUI.
-- Crossterm 0.28 — события клавиатуры и alternate screen.
-- sysinfo 0.33 — ОС, CPU, RAM, дисковые тома.
-- Serde/serde_json — планируемая сериализация отчётов.
-- chrono — временные метки.
-- anyhow — контекст ошибок.
-- PowerShell/CIM — отдельные read-only проверки Windows.
+## Scan log format
 
-Cargo.lock фиксирует разрешённые версии зависимостей для воспроизводимых сборок.
+- A unique SystemWatch_scan_YYYYMMDD_HHMMSS_mmm_pidNNNN.log is written beside the running executable.
+- File creation uses create_new; an existing report is never overwritten.
+- Header includes app version, host, OS, process ID, start/end timestamps, duration and status counts.
+- The system inventory appears at the beginning of the report: machine model, OS details, CPU, RAM/modules, BIOS, motherboard, GPU/driver, fixed volumes and hardware network adapters.
+- Each check includes its data source, status, summary and additional evidence lines returned by its PowerShell script.
+- Event message bodies are not exported. Logs can still contain identifying system details; warn users before sharing.
 
-## 4. Текущая структура
+## Development workflow - MUST FOLLOW
 
-```
-SystemWatch/
-├── Cargo.toml
-├── Cargo.lock
-├── .gitignore
-├── README.md
-├── README.DEV.md
-└── src/
-    └── main.rs
-```
+At the start of each session:
+1. Inspect git status --short --branch, recent commits and remotes.
+2. Read this file and the relevant source before editing.
+3. Preserve existing user changes; never reset or overwrite unrelated work.
 
-Код пока в одном файле, чтобы быстро подтвердить API и собрать работающий вертикальный срез. Следующий рефакторинг должен разделить app/ui/diagnostics/models/report.
+After each meaningful implementation step:
+1. Run cargo test and cargo check; run cargo build --release before preparing a release executable.
+2. Run git diff --check and inspect the complete diff.
+3. Update both README.md and README.DEV.md.
+4. Commit the verified changes to main.
+5. Push main to origin (https://github.com/Caracoto4/SystemWatch) and verify the local branch is synchronized with origin/main.
+6. Report exactly what was tested and whether the push succeeded. Never claim a push without checking it.
 
-## 5. Реализовано
+Never forget the GitHub synchronization step. If authentication/network prevents a push, leave the local commit intact and explicitly report that it remains unpushed.
 
-### Интерфейс и системная информация
-- TUI: Overview, Diagnostics, Storage, About.
-- Навигация стрелками, Tab, цифрами 1–4.
-- Выход Q/Esc.
-- Обновление инвентаризации по R и автоматически каждые 2 секунды.
-- Диагностический скан выполняется в отдельном worker thread; UI получает результат через std::sync::mpsc и остаётся отзывчивым.
-- Повторный запуск блокируется, пока текущий скан не завершён.
-- Имя хоста, название/версия ОС, версия ядра.
-- Количество логических CPU и средняя загрузка CPU.
-- Использованная/общая физическая память.
-- Список томов, файловая система, тип, used/total и процент использования.
-- RAII guard восстанавливает режим терминала при нормальном выходе и unwind panic.
+## Current work: expanded scan reports
 
-### Диагностика по S во вкладке Diagnostics
-1. **Devices & drivers** — CIM `Win32_PnPEntity`, выбор устройств с ненулевым `ConfigManagerErrorCode`. Показывается количество и до четырёх примеров.
-2. **Microsoft Defender** — `Get-MpComputerStatus`, читается `RealTimeProtectionEnabled`.
-3. **Windows Firewall** — `Get-NetFirewallProfile`, проверяется `Enabled` у возвращённых профилей.
-4. **Windows Services** — CIM Win32_Service; только остановленные Auto-start службы с ненулевым ExitCode помечаются WARNING. Остановленные службы без кода ошибки не считаются проблемой: службы с trigger-start могут штатно останавливаться.
-5. **Windows Event Log (24h)** — Get-WinEvent, только Critical/Error из System и Application за последние 24 часа. Выводятся агрегированные счётчики по журналам, без текста событий; выборка ограничена 501 записью на каждый журнал.
+- Added CheckResult.evidence to preserve all non-empty PowerShell output lines after the first status line.
+- Added system inventory collection to the top of each scan log.
+- Expanded detailed PowerShell output for devices, Defender, firewall, services, event logs and physical disks.
+- Added a Windows diagnostic smoke test that executes the six live checks and validates their result structure.
+- PowerShell failures now preserve the full error text to make script errors diagnosable.
+- Verified that the physical disk script emits its status line before evidence lines.
+- Live smoke test on the development PC: all six PowerShell checks returned parseable statuses; system inventory and the full report were generated and inspected by assertions. The current machine reported 9 Critical/Error event entries in the sampled 24-hour window; this is a count, not a diagnosis.
+- Verification: cargo test (6 passed), cargo check, cargo build --release and git diff --check succeeded.
 
-PowerShell запускается с `-NoLogo -NoProfile -NonInteractive`; stdout переводится в UTF-8 для корректного чтения русских ошибок. Никакие параметры изменения конфигурации не вызываются. Каждая команда изолирована; ошибка запуска/ненулевой код приводит к UNAVAILABLE. Неизвестный формат ответа также становится UNAVAILABLE.
+## Known limitations / next work
 
-### Подробные логи сканирования
-- После каждого завершённого сканирования создаётся новый файл SystemWatch_scan_YYYYMMDD_HHMMSS_mmm_pidNNNN.log рядом с реально запущенным EXE.
-- В лог входят hostname, версия ОС, PID, локальные timestamp начала/окончания, общая длительность, сводка статусов, источник и результат каждой проверки.
-- Файл создаётся атомарно с create_new; существующие файлы не перезаписываются даже при совпадении имени. Если лог не удалось сохранить, ошибка отображается в Diagnostics.
-- Сырые тексты событий Windows Event Log не экспортируются. Логи могут содержать имя компьютера, сведения об ОС и названия устройств/служб; перед передачей третьим лицам их нужно просмотреть.
-
-### Статусы
-- HEALTHY — проверка завершилась и её конкретное условие выполнено.
-- WARNING — обнаружено отклонение, требующее внимания.
-- CRITICAL — зарезервирован для надёжно подтверждённых серьёзных проблем.
-- UNAVAILABLE — источник недоступен, команда завершилась ошибкой или ответ некорректен.
-
-Важно: HEALTHY относится только к области конкретной проверки, не ко всему ПК.
-
-## 6. Ручная проверка PowerShell на dev-машине (2026-11-09)
-
-Скрипты модулей устройств, Defender, Firewall, Windows Services и Event Log были отдельно запущены в PowerShell на текущем ПК:
-
-- PnP: запрос завершился, устройств с ненулевым problem code — 0.
-- Defender: `RealTimeProtectionEnabled = True`.
-- Firewall: профили Domain, Private и Public вернули `Enabled = True`.
-
-- Windows Services: не найдено остановленных Auto-start служб с ненулевым ExitCode.
-
-Это фактические значения на машине разработчика в момент проверки, а не гарантия будущих запусков и не полная оценка безопасности Windows. Интерактивный запуск предыдущей версии TUI пользователь подтвердил; новую фоновую работу после последнего изменения нужно проверить отдельно.
-
-## 7. Проверки сборки и диагностики (2026-11-09)
-
-После добавления фонового сканирования, Event Log, логирования и Windows Services:
-- `cargo check` — успешно.
-- `cargo test` — 5 тестов успешно, 0 ошибок.
-- Unit tests проверяют разбор HEALTHY/WARNING, неизвестного статуса, пустого вывода и создание/чтение подробного scan log.
-- `cargo build --release` — успешно.
-- Новая Release-сборка доступна как target\release\systemwatch-next.exe (793,600 байт). Два процесса старой target\release\systemwatch.exe остаются открыты; их не завершали принудительно, поэтому основной EXE пока не заменён. После закрытия обоих окон можно собрать/заменить основной EXE.
-- `git diff --check` — без ошибок.
-- `rustfmt` пока не установлен; форматирование через `cargo fmt` не подтверждено. Не устанавливался автоматически.
-- Пользователь подтвердил, что предыдущая версия TUI запускается и работает. После добавления фонового worker и Event Log требуется повторно проверить S во время сканирования.
-- Event Log PowerShell-запрос после исправления синтаксиса отдельно проверен: WARNING с 8 Critical/Error в System и 0 в Application, exit code 0. Это счётчик событий, а не вывод о причине или серьёзности каждого случая; тексты событий намеренно не показываются.
-- Последний cargo check, cargo test (5/5), cargo build --release и git diff --check — успешно.
-
-## 8. Ограничения и не реализовано
-
-- Проверка устройств не анализирует все детали драйверов, только PnP problem codes.
-- Defender проверяется только по флагу real-time protection; это не полноценный аудит Defender.
-- Firewall проверяет только Enabled профилей, не правила и не качество конфигурации.
-- Нет SMART, файловой целостности, сети, WHEA, температурных датчиков, отчётов JSON/HTML, severity engine.
-- Диагностика работает в одном фоновом потоке; отмена уже запущенного системного запроса пока не реализована.
-- Нет тестов на других версиях Windows.
-- Совместимость с Windows 7/8/8.1/10 не заявлять до проверки зависимостей и реальных тестов.
-
-## 9. Следующие задачи
-
-1. [x] Пользователь проверил TUI и подтвердил работу вкладок и сканирования; после последних изменений повторить проверку фонового скана, Event Log и создания лога.
-2. [x] Перенести сканирование в worker thread, чтобы интерфейс не блокировался.
-3. Разнести код на модули.
-4. [x] Добавить Event Log: 24-часовое окно, агрегированные счётчики System/Application, без вывода текста событий; выборка ограничена 501 записью на каждый журнал.
-5. [x] Добавить диагностику служб с консервативной классификацией по ненулевому ExitCode.
-6. Добавить SMART/physical disk health и место на томах с объяснимыми порогами.
-7. Добавить сетевые адаптеры/DNS/gateway/connectivity.
-8. Добавить системную целостность только в read-only режиме (никаких repair).
-9. Добавить JSON, затем HTML отчёты с контролем приватности.
-10. Проверить portable release на чистой системе и зафиксировать минимальную Windows версию.
-
-## 10. Команды
-
-```powershell
-cargo fmt --check
-cargo check
-cargo test
-cargo run
-cargo build --release
-```
-
-## 11. Правила документации
-
-- README.md — пользовательский: текущие возможности, запуск, безопасность, ограничения.
-- README.DEV.md — подробные инженерные заметки, решения, версии, тестовые результаты, TODO.
-- Обновлять оба файла при каждом значимом этапе.
-- Отмечать статус только после реальной проверки.
-- Не добавлять вымышленные тесты/результаты.
+- Some Windows providers expose incomplete hardware/SMART telemetry; unavailable data must remain explicit.
+- Event-log samples are bounded to avoid unbounded report sizes.
+- No full SMART attribute interpretation, WHEA analysis, filesystem integrity scan, network diagnostics or JSON/HTML export yet.
+- rustfmt may not be installed on the development toolchain; check before using cargo fmt --check.
+- Validate the new report on the actual PC by running a scan in the TUI and reviewing the generated log.

@@ -20,6 +20,7 @@ struct CheckResult {
     name: String,
     status: String,
     detail: String,
+    evidence: Vec<String>,
 }
 
 struct App {
@@ -103,6 +104,7 @@ impl App {
                 name: "Diagnostics worker".into(),
                 status: "UNAVAILABLE".into(),
                 detail: format!("Could not start background scan: {error}"),
+                evidence: Vec::new(),
             }];
         }
     }
@@ -135,6 +137,7 @@ impl App {
                     name: "Diagnostics worker".into(),
                     status: "UNAVAILABLE".into(),
                     detail: "The background scan ended without returning results.".into(),
+                    evidence: Vec::new(),
                 }];
                 self.scan_running = false;
                 self.scan_receiver = None;
@@ -164,12 +167,14 @@ fn parse_check_line(name: &str, line: &str) -> CheckResult {
             name: name.to_string(),
             status: "UNAVAILABLE".into(),
             detail: "The check returned an unrecognized status format.".into(),
+            evidence: Vec::new(),
         };
     }
     CheckResult {
         name: name.to_string(),
         status,
         detail: if message.is_empty() { detail } else { format!("{detail} — {message}") },
+        evidence: Vec::new(),
     }
 }
 
@@ -182,39 +187,81 @@ fn powershell_check(name: &str, script: &str) -> CheckResult {
     match output {
         Ok(result) if result.status.success() => {
             let stdout = String::from_utf8_lossy(&result.stdout);
-            let line = stdout.lines().find(|line| !line.trim().is_empty()).unwrap_or("");
-            parse_check_line(name, line)
+            let mut lines = stdout.lines().filter(|line| !line.trim().is_empty());
+            let line = lines.next().unwrap_or("");
+            let mut check = parse_check_line(name, line);
+            check.evidence = lines.map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect();
+            check
         }
         Ok(result) => CheckResult {
             name: name.to_string(),
             status: "UNAVAILABLE".into(),
-            detail: String::from_utf8_lossy(&result.stderr).lines().next()
-                .unwrap_or("PowerShell check failed.").trim().to_string(),
+            detail: {
+                let message = String::from_utf8_lossy(&result.stderr).trim().to_string();
+                if message.is_empty() { "PowerShell check failed without an error message.".to_string() } else { message }
+            },
+            evidence: Vec::new(),
         },
         Err(error) => CheckResult {
             name: name.to_string(),
             status: "UNAVAILABLE".into(),
             detail: format!("Could not start PowerShell: {error}"),
+            evidence: Vec::new(),
         },
     }
 }
 
 fn run_windows_checks() -> Vec<CheckResult> {
-    let devices = r#"$ErrorActionPreference='Stop'; try { $bad=@(Get-CimInstance -ClassName Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 }); if($bad.Count -eq 0){ 'HEALTHY|No device problem codes reported|Device Manager inventory' } else { $items=($bad | Select-Object -First 4 | ForEach-Object { '{0} (code {1})' -f $_.Name,$_.ConfigManagerErrorCode }) -join '; '; 'WARNING|{0} device(s) report a problem code|{1}' -f $bad.Count,$items } } catch { 'UNAVAILABLE|Device inventory query failed|' + $_.Exception.Message }"#;
-    let defender = r#"$ErrorActionPreference='Stop'; try { $s=Get-MpComputerStatus; if($s.RealTimeProtectionEnabled){ 'HEALTHY|Real-time protection is enabled|Microsoft Defender status' } else { 'WARNING|Real-time protection is reported disabled|Microsoft Defender status' } } catch { 'UNAVAILABLE|Defender status could not be read|' + $_.Exception.Message }"#;
-    let firewall = r#"$ErrorActionPreference='Stop'; try { $p=@(Get-NetFirewallProfile); if($p.Count -eq 0){ 'UNAVAILABLE|No firewall profiles returned|' } else { $off=@($p | Where-Object { -not $_.Enabled }); if($off.Count -eq 0){ 'HEALTHY|All returned firewall profiles are enabled|Domain, Private and Public profiles' } else { $names=($off | ForEach-Object { $_.Name }) -join ', '; 'WARNING|{0} firewall profile(s) are disabled|{1}' -f $off.Count,$names } } } catch { 'UNAVAILABLE|Firewall status could not be read|' + $_.Exception.Message }"#;
+    let devices = r#"$ErrorActionPreference='Stop'; try { $bad=@(Get-CimInstance -ClassName Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne $null -and $_.ConfigManagerErrorCode -ne 0 }); if($bad.Count -eq 0){ 'HEALTHY|No device problem codes reported|Device Manager inventory' } else { 'WARNING|{0} device(s) report a problem code|See detailed findings' -f $bad.Count }; ('PnP devices enumerated: {0}' -f (@(Get-CimInstance Win32_PnPEntity)).Count); foreach($d in ($bad | Select-Object -First 100)){ 'Problem device: {0}; code={1}; status={2}; class={3}' -f $d.Name,$d.ConfigManagerErrorCode,$d.Status,$d.PNPClass } } catch { 'UNAVAILABLE|Device inventory query failed|' + $_.Exception.Message }"#;
+    let defender = r#"$ErrorActionPreference='Stop'; try { $s=Get-MpComputerStatus; if($s.RealTimeProtectionEnabled){ 'HEALTHY|Real-time protection is enabled|Microsoft Defender status' } else { 'WARNING|Real-time protection is reported disabled|Microsoft Defender status' }; foreach($k in @('AMServiceEnabled','AntivirusEnabled','AntispywareEnabled','BehaviorMonitorEnabled','IoavProtectionEnabled','NISEnabled','RealTimeProtectionEnabled','OnAccessProtectionEnabled','QuickScanAge','FullScanAge','AntivirusSignatureVersion','AntivirusSignatureLastUpdated','AMEngineVersion','ComputerState')){ $v=$s.$k; if($null -ne $v){ '{0}: {1}' -f $k,$v } } } catch { 'UNAVAILABLE|Defender status could not be read|' + $_.Exception.Message }"#;
+    let firewall = r#"$ErrorActionPreference='Stop'; try { $p=@(Get-NetFirewallProfile); if($p.Count -eq 0){ 'UNAVAILABLE|No firewall profiles returned|' } else { $off=@($p | Where-Object { -not $_.Enabled }); if($off.Count -eq 0){ 'HEALTHY|All returned firewall profiles are enabled|Get-NetFirewallProfile' } else { 'WARNING|{0} firewall profile(s) are disabled|See detailed findings' -f $off.Count }; foreach($x in $p){ 'Profile: {0}; enabled={1}; inbound={2}; outbound={3}; notifications={4}; policy={5}' -f $x.Name,$x.Enabled,$x.DefaultInboundAction,$x.DefaultOutboundAction,$x.NotifyOnListen,$x.PolicyStoreSource } } } catch { 'UNAVAILABLE|Firewall status could not be read|' + $_.Exception.Message }"#;
 
-    let services = r#"$ErrorActionPreference='Stop'; try { $stopped=@(Get-CimInstance -ClassName Win32_Service | Where-Object { $_.StartMode -eq 'Auto' -and $_.State -eq 'Stopped' -and $_.ExitCode -ne 0 }); if($stopped.Count -eq 0){ 'HEALTHY|No stopped automatic service with a non-zero exit code was found|Conservative service check; trigger-start services may normally be stopped' } else { $items=($stopped | Select-Object -First 5 | ForEach-Object { '{0} (exit code {1})' -f $_.Name,$_.ExitCode }) -join '; '; 'WARNING|{0} stopped automatic service(s) report a non-zero exit code|{1}' -f $stopped.Count,$items } } catch { 'UNAVAILABLE|Windows service inventory could not be queried|' + $_.Exception.Message }"#;
-    let event_log = r#"$ErrorActionPreference='Stop'; try { $since=(Get-Date).AddHours(-24); $all=@(); foreach($log in @('System','Application')) { try { $items=@(Get-WinEvent -FilterHashtable @{LogName=$log; Level=1,2; StartTime=$since} -MaxEvents 501 -ErrorAction Stop); $all += $items | ForEach-Object { [pscustomobject]@{ Log=$log; Level=$_.Level } } } catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { throw } } }; $count=$all.Count; if($count -eq 0){ 'HEALTHY|No critical or error events found in the queried 24-hour window|System and Application logs' } else { $sys=@($all | Where-Object {$_.Log -eq 'System'}).Count; $app=@($all | Where-Object {$_.Log -eq 'Application'}).Count; $capped=($sys -ge 501 -or $app -ge 501); if($capped){ 'WARNING|At least {0} critical/error event(s) in the last 24 hours (sample capped per log)|System: {1}; Application: {2}' -f $count,$sys,$app } else { 'WARNING|{0} critical/error event(s) in the last 24 hours|System: {1}; Application: {2}' -f $count,$sys,$app } } } catch { 'UNAVAILABLE|Windows event logs could not be queried|' + $_.Exception.Message }"#;
+    let services = r#"$ErrorActionPreference='Stop'; try { $stopped=@(Get-CimInstance -ClassName Win32_Service | Where-Object { $_.StartMode -eq 'Auto' -and $_.State -eq 'Stopped' -and $_.ExitCode -ne 0 }); if($stopped.Count -eq 0){ 'HEALTHY|No stopped automatic service with a non-zero exit code was found|Conservative service check' } else { 'WARNING|{0} stopped automatic service(s) report a non-zero exit code|See detailed findings' -f $stopped.Count }; ('Services enumerated: {0}' -f (@(Get-CimInstance Win32_Service)).Count); foreach($x in ($stopped | Select-Object -First 100)){ 'Service: {0}; display={1}; state={2}; start={3}; exit={4}; account={5}' -f $x.Name,$x.DisplayName,$x.State,$x.StartMode,$x.ExitCode,$x.StartName } } catch { 'UNAVAILABLE|Windows service inventory could not be queried|' + $_.Exception.Message }"#;
+    let event_log = r#"$ErrorActionPreference='Stop'; try { $since=(Get-Date).AddHours(-24); $all=@(); foreach($log in @('System','Application')) { try { $items=@(Get-WinEvent -FilterHashtable @{LogName=$log; Level=1,2; StartTime=$since} -MaxEvents 501 -ErrorAction Stop); $all += $items | ForEach-Object { [pscustomobject]@{ Log=$log; Level=$_.Level } } } catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { throw } } }; $count=$all.Count; $sys=@($all | Where-Object {$_.Log -eq 'System'}).Count; $app=@($all | Where-Object {$_.Log -eq 'Application'}).Count; if($count -eq 0){ 'HEALTHY|No critical or error events found in the queried 24-hour window|System and Application logs' } else { 'WARNING|{0} critical/error event(s) in the last 24 hours|System: {1}; Application: {2}' -f $count,$sys,$app }; foreach($log in @('System','Application')){ try { foreach($e in @(Get-WinEvent -FilterHashtable @{LogName=$log;Level=1,2;StartTime=$since} -MaxEvents 50 -ErrorAction Stop)){ 'Event: log={0}; time={1}; level={2}; id={3}; provider={4}; record={5}' -f $log,$e.TimeCreated,$e.LevelDisplayName,$e.Id,$e.ProviderName,$e.RecordId } } catch { if($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*'){ 'Event sample unavailable for {0}: {1}' -f $log,$_.Exception.Message } } } } catch { 'UNAVAILABLE|Windows event logs could not be queried|' + $_.Exception.Message }"#;
+    let disk_health = r#"$ErrorActionPreference='Stop'; try { $disks=@(Get-PhysicalDisk -ErrorAction Stop); if($disks.Count -eq 0){ 'UNAVAILABLE|No physical disks were returned by the Storage provider|' } else { $bad=@($disks | Where-Object { $_.HealthStatus -eq 'Unhealthy' }); $warn=@($disks | Where-Object { $_.HealthStatus -eq 'Warning' }); $unknown=@($disks | Where-Object { $_.HealthStatus -notin @('Healthy','Warning','Unhealthy') }); $items=@(); foreach($d in ($disks | Select-Object -First 100)){ $label=('{0}: health={1}; operational={2}' -f $d.FriendlyName,$d.HealthStatus,($d.OperationalStatus -join ',')); try { $r=Get-StorageReliabilityCounter -PhysicalDisk $d -ErrorAction Stop; $extra=@(); if($null -ne $r.Temperature -and $r.Temperature -gt 0){ $extra += ('temperature={0}C' -f $r.Temperature) }; if($null -ne $r.Wear -and $r.Wear -ge 0){ $extra += ('wear={0}%' -f $r.Wear) }; if($extra.Count -gt 0){ $label += '; telemetry: ' + ($extra -join ', ') } } catch { }; $items += $label }; if($bad.Count -gt 0){ 'CRITICAL|{0} disk(s) report Unhealthy|{1}' -f $bad.Count,($items -join '; ') } elseif($warn.Count -gt 0){ 'WARNING|{0} disk(s) report Warning health status|{1}' -f $warn.Count,($items -join '; ') } elseif($unknown.Count -eq $disks.Count){ 'UNAVAILABLE|Physical disks were found but health status is not reported|{0}' -f ($items -join '; ') } elseif($unknown.Count -gt 0){ 'WARNING|Health status is unknown for {0} of {1} disk(s)|{2}' -f $unknown.Count,$disks.Count,($items -join '; ') } else { 'HEALTHY|All returned physical disks report Healthy|{0}; reliability telemetry is shown only when exposed by the device' -f ($items -join '; ') } }; foreach($item in $items){ 'Disk detail: ' + $item } } catch { 'UNAVAILABLE|Physical disk health could not be queried|' + $_.Exception.Message }"#;
     vec![
         powershell_check("Devices & drivers", devices),
         powershell_check("Microsoft Defender", defender),
         powershell_check("Windows Firewall", firewall),
         powershell_check("Windows Services", services),
         powershell_check("Windows Event Log (24h)", event_log),
+        powershell_check("Physical disk health", disk_health),
     ]
 }
 
+
+
+fn collect_system_info() -> Vec<String> {
+    let script = r#"$ErrorActionPreference='Stop'; try {
+      $os=Get-CimInstance Win32_OperatingSystem
+      $cs=Get-CimInstance Win32_ComputerSystem
+      $cpu=@(Get-CimInstance Win32_Processor)
+      $bios=Get-CimInstance Win32_BIOS
+      $board=Get-CimInstance Win32_BaseBoard
+      $gpu=@(Get-CimInstance Win32_VideoController)
+      $ram=@(Get-CimInstance Win32_PhysicalMemory)
+      'Manufacturer / model: {0} / {1}' -f $cs.Manufacturer,$cs.Model
+      'OS edition: {0}; version: {1}; build: {2}; architecture: {3}' -f $os.Caption,$os.Version,$os.BuildNumber,$os.OSArchitecture
+      'Install date: {0}; last boot: {1}' -f $os.InstallDate,$os.LastBootUpTime
+      'System type: {0}; domain/workgroup: {1}' -f $cs.SystemType,$cs.Domain
+      'Current user: {0}' -f [Security.Principal.WindowsIdentity]::GetCurrent().Name
+      'CPU packages: {0}; physical cores: {1}; logical processors: {2}' -f $cpu.Count,(($cpu|Measure-Object NumberOfCores -Sum).Sum),(($cpu|Measure-Object NumberOfLogicalProcessors -Sum).Sum)
+      foreach($c in $cpu){ 'CPU: {0}; cores={1}; threads={2}; max MHz={3}' -f $c.Name,$c.NumberOfCores,$c.NumberOfLogicalProcessors,$c.MaxClockSpeed }
+      'Installed RAM: {0:N2} GB; modules: {1}' -f ($cs.TotalPhysicalMemory/1GB),$ram.Count
+      foreach($m in $ram){ 'RAM module: {0:N0} MB; speed={1} MHz; manufacturer={2}; part={3}' -f ($m.Capacity/1MB),$m.Speed,$m.Manufacturer,$m.PartNumber }
+      'BIOS: {0}; version: {1}; date: {2}' -f $bios.Manufacturer,($bios.SMBIOSBIOSVersion -join ', '),$bios.ReleaseDate
+      'Motherboard: {0} {1}' -f $board.Manufacturer,$board.Product
+      foreach($g in $gpu){ 'GPU: {0}; driver={1}; video memory={2}' -f $g.Name,$g.DriverVersion,$g.AdapterRAM }
+      foreach($d in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')){ 'Volume {0} [{1}]: {2:N1} GB free / {3:N1} GB total; filesystem={4}' -f $d.DeviceID,$d.VolumeName,($d.FreeSpace/1GB),($d.Size/1GB),$d.FileSystem }
+      foreach($n in @(Get-NetAdapter -ErrorAction SilentlyContinue|Where-Object {$_.HardwareInterface})){ 'Network adapter: {0}; status={1}; speed={2}; interface={3}' -f $n.Name,$n.Status,$n.LinkSpeed,$n.InterfaceDescription }
+    } catch { 'System inventory unavailable: ' + $_.Exception.Message }"#;
+    let utf8_script = format!("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; {script}");
+    match Command::new("powershell.exe").args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &utf8_script]).output() {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_string).collect(),
+        Ok(output) => vec![format!("System inventory query failed: {}", String::from_utf8_lossy(&output.stderr).trim())],
+        Err(error) => vec![format!("Could not start PowerShell for system inventory: {error}")],
+    }
+}
 
 fn write_scan_log(
     host: &str,
@@ -243,6 +290,12 @@ fn write_scan_log(
     writeln!(&mut report, "Application: SystemWatch 0.1.0")?;
     writeln!(&mut report, "Host: {host}")?;
     writeln!(&mut report, "Operating system: {os}")?;
+    writeln!(&mut report, "")?;
+    writeln!(&mut report, "SYSTEM INFORMATION")?;
+    writeln!(&mut report, "----------------------------------------")?;
+    for item in collect_system_info() {
+        writeln!(&mut report, "{item}")?;
+    }
     writeln!(&mut report, "Process ID: {}", std::process::id())?;
     writeln!(&mut report, "Started: {}", started_at.format("%Y-%m-%d %H:%M:%S%.3f %:z"))?;
     writeln!(&mut report, "Finished: {}", finished_at.format("%Y-%m-%d %H:%M:%S%.3f %:z"))?;
@@ -260,11 +313,18 @@ fn write_scan_log(
             "Windows Firewall" => "Get-NetFirewallProfile / Enabled",
             "Windows Services" => "CIM Win32_Service / StartMode, State, ExitCode",
             "Windows Event Log (24h)" => "Get-WinEvent / System + Application / Critical + Error / last 24h",
+            "Physical disk health" => "Get-PhysicalDisk / HealthStatus + Get-StorageReliabilityCounter when supported",
             _ => "Internal diagnostic result",
         };
         writeln!(&mut report, "{}. [{}] {}", index + 1, check.status, check.name)?;
         writeln!(&mut report, "   Source: {source}")?;
         writeln!(&mut report, "   Result: {}", check.detail)?;
+        if !check.evidence.is_empty() {
+            writeln!(&mut report, "   Detailed findings:")?;
+            for item in &check.evidence {
+                writeln!(&mut report, "      - {item}")?;
+            }
+        }
         writeln!(&mut report, "")?;
     }
     writeln!(&mut report, "========================================")?;
@@ -538,7 +598,7 @@ fn draw_about(frame: &mut Frame, area: Rect) {
 }
 #[cfg(test)]
 mod tests {
-    use super::{parse_check_line, write_scan_log, CheckResult};
+    use super::{parse_check_line, run_windows_checks, write_scan_log, CheckResult};
     use std::fs;
 
     #[test]
@@ -571,6 +631,7 @@ mod tests {
             name: "Example check".into(),
             status: "HEALTHY".into(),
             detail: "Test result".into(),
+            evidence: vec!["Additional measured detail".into()],
         }];
         let path = write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks)
             .expect("scan log should be written");
@@ -579,10 +640,37 @@ mod tests {
         assert!(contents.contains("TEST-WINDOWS"));
         assert!(contents.contains("Example check"));
         assert!(contents.contains("Test result"));
+        assert!(contents.contains("SYSTEM INFORMATION"));
+        assert!(contents.contains("Additional measured detail"));
         assert!(contents.contains("Source: Internal diagnostic result"));
+        assert!(contents.contains("Detailed findings:"));
         assert!(write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks).is_err());
         fs::remove_file(path).expect("test scan log should be removed");
     }
+
+    #[test]
+    fn windows_diagnostic_checks_return_structured_results() {
+        let results = run_windows_checks();
+        assert_eq!(results.len(), 6);
+        for check in &results {
+            assert!(["HEALTHY", "WARNING", "CRITICAL", "UNAVAILABLE"].contains(&check.status.as_str()));
+            assert!(!check.name.is_empty());
+            assert!(!check.detail.is_empty());
+            println!("[{}] {}: {} ({} detail lines)", check.status, check.name, check.detail, check.evidence.len());
+        }
+        let started = chrono::Local::now() - chrono::Duration::seconds(1);
+        let finished = chrono::Local::now();
+        let path = write_scan_log("LIVE-TEST", "Windows test", started, finished, &results)
+            .expect("live scan report should be written");
+        let report = fs::read_to_string(&path).expect("live scan report should be readable");
+        assert!(report.contains("SYSTEM INFORMATION"));
+        assert!(report.contains("Devices & drivers"));
+        assert!(report.contains("Microsoft Defender"));
+        assert!(report.contains("Detailed findings:"));
+        println!("Live diagnostic report: {}", path.display());
+        fs::remove_file(path).expect("live scan report should be removed");
+    }
+
     #[test]
     fn missing_output_becomes_unavailable() {
         let result = parse_check_line("Example", "");
