@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::{io, process::Command, sync::mpsc::{self, Receiver, TryRecvError}, thread, time::{Duration, Instant}};
+use std::{fs, io, path::PathBuf, process::Command, sync::mpsc::{self, Receiver, TryRecvError}, thread, time::{Duration, Instant}};
 use sysinfo::{Disks, System};
 
 #[derive(Clone)]
@@ -35,6 +35,9 @@ struct App {
     scan_completed: Option<Instant>,
     scan_running: bool,
     scan_receiver: Option<Receiver<Vec<CheckResult>>>,
+    scan_started_at: Option<chrono::DateTime<chrono::Local>>,
+    scan_log_path: Option<PathBuf>,
+    scan_log_error: Option<String>,
 }
 
 impl App {
@@ -65,6 +68,9 @@ impl App {
             scan_completed: None,
             scan_running: false,
             scan_receiver: None,
+            scan_started_at: None,
+            scan_log_path: None,
+            scan_log_error: None,
         }
     }
 
@@ -78,6 +84,9 @@ impl App {
         if self.scan_running {
             return;
         }
+        self.scan_started_at = Some(chrono::Local::now());
+        self.scan_log_path = None;
+        self.scan_log_error = None;
         let (sender, receiver) = mpsc::channel();
         self.scan_receiver = Some(receiver);
         self.scan_running = true;
@@ -109,6 +118,13 @@ impl App {
         };
         match received {
             Some(Some(results)) => {
+                let finished_at = chrono::Local::now();
+                if let Some(started_at) = self.scan_started_at.take() {
+                    match write_scan_log(&self.host, &self.os, started_at, finished_at, &results) {
+                        Ok(path) => self.scan_log_path = Some(path),
+                        Err(error) => self.scan_log_error = Some(format!("{error:#}")),
+                    }
+                }
                 self.checks = results;
                 self.scan_completed = Some(Instant::now());
                 self.scan_running = false;
@@ -158,8 +174,9 @@ fn parse_check_line(name: &str, line: &str) -> CheckResult {
 }
 
 fn powershell_check(name: &str, script: &str) -> CheckResult {
+    let utf8_script = format!("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; $OutputEncoding = [Console]::OutputEncoding; {script}");
     let output = Command::new("powershell.exe")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &utf8_script])
         .output();
 
     match output {
@@ -187,15 +204,81 @@ fn run_windows_checks() -> Vec<CheckResult> {
     let defender = r#"$ErrorActionPreference='Stop'; try { $s=Get-MpComputerStatus; if($s.RealTimeProtectionEnabled){ 'HEALTHY|Real-time protection is enabled|Microsoft Defender status' } else { 'WARNING|Real-time protection is reported disabled|Microsoft Defender status' } } catch { 'UNAVAILABLE|Defender status could not be read|' + $_.Exception.Message }"#;
     let firewall = r#"$ErrorActionPreference='Stop'; try { $p=@(Get-NetFirewallProfile); if($p.Count -eq 0){ 'UNAVAILABLE|No firewall profiles returned|' } else { $off=@($p | Where-Object { -not $_.Enabled }); if($off.Count -eq 0){ 'HEALTHY|All returned firewall profiles are enabled|Domain, Private and Public profiles' } else { $names=($off | ForEach-Object { $_.Name }) -join ', '; 'WARNING|{0} firewall profile(s) are disabled|{1}' -f $off.Count,$names } } } catch { 'UNAVAILABLE|Firewall status could not be read|' + $_.Exception.Message }"#;
 
-    let event_log = r#"$ErrorActionPreference='Stop'; try { $since=(Get-Date).AddHours(-24); $all=@(); foreach($log in @('System','Application')) { try { $items=@(Get-WinEvent -FilterHashtable @{LogName=$log; Level=1,2; StartTime=$since} -MaxEvents 501 -ErrorAction Stop); $all += $items | ForEach-Object { [pscustomobject]@{ Log=$log; Level=$_.Level } } } catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { throw } } }; $count=$all.Count; if($count -eq 0){ 'HEALTHY|No critical or error events found in the queried 24-hour window|System and Application logs' } else { $sys=@($all | Where-Object {$_.Log -eq 'System'}).Count; $app=@($all | Where-Object {$_.Log -eq 'Application'}).Count; $capped=($sys -ge 501 -or $app -ge 501); if($capped){ 'WARNING|At least {0} critical/error event(s) in the last 24 hours (sample capped per log)|System: {1}; Application: {2}' -f $count,$sys,$app } else { 'WARNING|{0} critical/error event(s) in the last 24 hours|System: {1}; Application: {2}' -f $count,$sys,$app } } } catch { 'UNAVAILABLE|Windows event logs could not be queried|' + $_.Exception.Message } }"#;
+    let services = r#"$ErrorActionPreference='Stop'; try { $stopped=@(Get-CimInstance -ClassName Win32_Service | Where-Object { $_.StartMode -eq 'Auto' -and $_.State -eq 'Stopped' -and $_.ExitCode -ne 0 }); if($stopped.Count -eq 0){ 'HEALTHY|No stopped automatic service with a non-zero exit code was found|Conservative service check; trigger-start services may normally be stopped' } else { $items=($stopped | Select-Object -First 5 | ForEach-Object { '{0} (exit code {1})' -f $_.Name,$_.ExitCode }) -join '; '; 'WARNING|{0} stopped automatic service(s) report a non-zero exit code|{1}' -f $stopped.Count,$items } } catch { 'UNAVAILABLE|Windows service inventory could not be queried|' + $_.Exception.Message }"#;
+    let event_log = r#"$ErrorActionPreference='Stop'; try { $since=(Get-Date).AddHours(-24); $all=@(); foreach($log in @('System','Application')) { try { $items=@(Get-WinEvent -FilterHashtable @{LogName=$log; Level=1,2; StartTime=$since} -MaxEvents 501 -ErrorAction Stop); $all += $items | ForEach-Object { [pscustomobject]@{ Log=$log; Level=$_.Level } } } catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { throw } } }; $count=$all.Count; if($count -eq 0){ 'HEALTHY|No critical or error events found in the queried 24-hour window|System and Application logs' } else { $sys=@($all | Where-Object {$_.Log -eq 'System'}).Count; $app=@($all | Where-Object {$_.Log -eq 'Application'}).Count; $capped=($sys -ge 501 -or $app -ge 501); if($capped){ 'WARNING|At least {0} critical/error event(s) in the last 24 hours (sample capped per log)|System: {1}; Application: {2}' -f $count,$sys,$app } else { 'WARNING|{0} critical/error event(s) in the last 24 hours|System: {1}; Application: {2}' -f $count,$sys,$app } } } catch { 'UNAVAILABLE|Windows event logs could not be queried|' + $_.Exception.Message }"#;
     vec![
         powershell_check("Devices & drivers", devices),
         powershell_check("Microsoft Defender", defender),
         powershell_check("Windows Firewall", firewall),
+        powershell_check("Windows Services", services),
         powershell_check("Windows Event Log (24h)", event_log),
     ]
 }
 
+
+fn write_scan_log(
+    host: &str,
+    os: &str,
+    started_at: chrono::DateTime<chrono::Local>,
+    finished_at: chrono::DateTime<chrono::Local>,
+    checks: &[CheckResult],
+) -> Result<PathBuf> {
+    let executable = std::env::current_exe().context("Could not locate the running executable")?;
+    let directory = executable.parent().context("Executable path has no parent directory")?;
+    let filename = format!(
+        "SystemWatch_scan_{}_pid{}.log",
+        finished_at.format("%Y%m%d_%H%M%S_%3f"),
+        std::process::id()
+    );
+    let path = directory.join(filename);
+    let duration = finished_at.signed_duration_since(started_at);
+    let healthy = checks.iter().filter(|check| check.status == "HEALTHY").count();
+    let warning = checks.iter().filter(|check| check.status == "WARNING").count();
+    let critical = checks.iter().filter(|check| check.status == "CRITICAL").count();
+    let unavailable = checks.iter().filter(|check| check.status == "UNAVAILABLE").count();
+    let mut report = String::new();
+    use std::fmt::Write as FmtWrite;
+    writeln!(&mut report, "SYSTEMWATCH DIAGNOSTIC SCAN")?;
+    writeln!(&mut report, "========================================")?;
+    writeln!(&mut report, "Application: SystemWatch 0.1.0")?;
+    writeln!(&mut report, "Host: {host}")?;
+    writeln!(&mut report, "Operating system: {os}")?;
+    writeln!(&mut report, "Process ID: {}", std::process::id())?;
+    writeln!(&mut report, "Started: {}", started_at.format("%Y-%m-%d %H:%M:%S%.3f %:z"))?;
+    writeln!(&mut report, "Finished: {}", finished_at.format("%Y-%m-%d %H:%M:%S%.3f %:z"))?;
+    writeln!(&mut report, "Duration: {} ms", duration.num_milliseconds())?;
+    writeln!(&mut report, "Checks completed: {}", checks.len())?;
+    writeln!(
+        &mut report,
+        "Summary: {healthy} healthy, {warning} warning, {critical} critical, {unavailable} unavailable"
+    )?;
+    writeln!(&mut report, "")?;
+    for (index, check) in checks.iter().enumerate() {
+        let source = match check.name.as_str() {
+            "Devices & drivers" => "CIM Win32_PnPEntity / ConfigManagerErrorCode",
+            "Microsoft Defender" => "Get-MpComputerStatus / RealTimeProtectionEnabled",
+            "Windows Firewall" => "Get-NetFirewallProfile / Enabled",
+            "Windows Services" => "CIM Win32_Service / StartMode, State, ExitCode",
+            "Windows Event Log (24h)" => "Get-WinEvent / System + Application / Critical + Error / last 24h",
+            _ => "Internal diagnostic result",
+        };
+        writeln!(&mut report, "{}. [{}] {}", index + 1, check.status, check.name)?;
+        writeln!(&mut report, "   Source: {source}")?;
+        writeln!(&mut report, "   Result: {}", check.detail)?;
+        writeln!(&mut report, "")?;
+    }
+    writeln!(&mut report, "========================================")?;
+    writeln!(&mut report, "SystemWatch is read-only. A status applies only to the named check.")?;
+    writeln!(&mut report, "Event log entries are summarized; raw event message text is not included.")?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .with_context(|| format!("Could not create scan log {} without overwriting an existing file", path.display()))?;
+    std::io::Write::write_all(&mut file, report.as_bytes())
+        .with_context(|| format!("Could not write scan log {}", path.display()))?;
+    Ok(path)
+}
 struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> Result<Self> {
@@ -357,6 +440,7 @@ fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from("  • Plug and Play device problem codes"));
         lines.push(Line::from("  • Microsoft Defender real-time protection status"));
         lines.push(Line::from("  • Windows Firewall profile status"));
+        lines.push(Line::from("  • Windows services with non-zero failure codes"));
         lines.push(Line::from("  • System and Application critical/error event counts (24h)"));
     } else {
         for check in &app.checks {
@@ -372,6 +456,12 @@ fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
         }
         if let Some(done) = app.scan_completed {
             lines.push(Line::from(format!("Scan completed {:.0}s ago.", done.elapsed().as_secs_f32())));
+        }
+        if let Some(path) = &app.scan_log_path {
+            lines.push(Line::from(format!("Detailed log saved: {}", path.display())));
+        }
+        if let Some(error) = &app.scan_log_error {
+            lines.push(Line::from(format!("Could not save scan log: {error}")));
         }
     }
     lines.push(Line::from(""));
@@ -448,7 +538,8 @@ fn draw_about(frame: &mut Frame, area: Rect) {
 }
 #[cfg(test)]
 mod tests {
-    use super::parse_check_line;
+    use super::{parse_check_line, write_scan_log, CheckResult};
+    use std::fs;
 
     #[test]
     fn parses_healthy_result() {
@@ -471,6 +562,27 @@ mod tests {
         assert_eq!(result.status, "UNAVAILABLE");
     }
 
+
+    #[test]
+    fn writes_detailed_scan_log_next_to_executable() {
+        let started = chrono::Local::now() - chrono::Duration::seconds(1);
+        let finished = chrono::Local::now();
+        let checks = vec![CheckResult {
+            name: "Example check".into(),
+            status: "HEALTHY".into(),
+            detail: "Test result".into(),
+        }];
+        let path = write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks)
+            .expect("scan log should be written");
+        let contents = fs::read_to_string(&path).expect("scan log should be readable");
+        assert!(contents.contains("TEST-HOST"));
+        assert!(contents.contains("TEST-WINDOWS"));
+        assert!(contents.contains("Example check"));
+        assert!(contents.contains("Test result"));
+        assert!(contents.contains("Source: Internal diagnostic result"));
+        assert!(write_scan_log("TEST-HOST", "TEST-WINDOWS", started, finished, &checks).is_err());
+        fs::remove_file(path).expect("test scan log should be removed");
+    }
     #[test]
     fn missing_output_becomes_unavailable() {
         let result = parse_check_line("Example", "");
