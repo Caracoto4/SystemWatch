@@ -451,15 +451,42 @@ fn draw(frame: &mut Frame, app: &App) {
 fn draw_overview(frame: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Length(7), Constraint::Min(5)])
+        .constraints([Constraint::Length(10), Constraint::Length(7), Constraint::Min(3)])
         .split(area);
     let cpu = app.cpu_usage();
     let mem_total = app.system.total_memory();
     let mem_used = app.system.used_memory();
     let mem_pct = if mem_total == 0 { 0.0 } else { mem_used as f64 / mem_total as f64 * 100.0 };
+    let cpus = app.system.cpus();
+    let cpu_brand = cpus.first().map(|cpu| cpu.brand().trim()).filter(|brand| !brand.is_empty()).unwrap_or("CPU information unavailable");
+    let logical_cores = cpus.len();
+    let physical_cores = app.system.physical_core_count().unwrap_or(logical_cores);
+    let max_frequency = cpus.iter().map(|cpu| cpu.frequency()).max().unwrap_or(0);
+    let uptime = format_uptime(System::uptime());
+    let disks = app.disks.list();
+    let total_storage: u64 = disks.iter().map(|disk| disk.total_space()).sum();
+    let free_storage: u64 = disks.iter().map(|disk| disk.available_space()).sum();
+    let storage_summary = if disks.is_empty() {
+        "Storage: no volumes detected".to_string()
+    } else {
+        format!("Storage: {} volume(s), {:.0} GiB total / {:.0} GiB free", disks.len(), total_storage as f64 / 1_073_741_824.0, free_storage as f64 / 1_073_741_824.0)
+    };
+    let os_version = System::long_os_version().unwrap_or_else(|| app.os.clone());
     let summary = format!(
-        "Host: {}\nOS: {}\nCPU: {} logical processors",
-        app.host, app.os, app.system.cpus().len()
+        "Host: {}\nOS: {}\nKernel: {}  |  Architecture: {}\nCPU: {}\nCores: {} physical / {} logical  |  Reported clock: {} MHz\nMemory: {:.1} / {:.1} GiB used ({:.1}%)\nUptime: {}\n{}",
+        app.host,
+        os_version,
+        System::kernel_version().unwrap_or_else(|| "unknown".into()),
+        std::env::consts::ARCH,
+        cpu_brand,
+        physical_cores,
+        logical_cores,
+        max_frequency,
+        mem_used as f64 / 1_073_741_824.0,
+        mem_total as f64 / 1_073_741_824.0,
+        mem_pct,
+        uptime,
+        storage_summary,
     );
     frame.render_widget(
         Paragraph::new(summary)
@@ -499,6 +526,14 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+fn format_uptime(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if days > 0 { format!("{}d {}h {}m", days, hours, minutes) }
+    else if hours > 0 { format!("{}h {}m", hours, minutes) }
+    else { format!("{}m", minutes) }
+}
 fn status_color(status: &str) -> Color {
     match status {
         "HEALTHY" => Color::Green,
@@ -705,7 +740,7 @@ fn draw_about(frame: &mut Frame, area: Rect) {
 }
 #[cfg(test)]
 mod tests {
-    use super::{draw_diagnostics, parse_check_line, run_windows_checks, scan_assessment, write_scan_log, App, CheckResult, Color};
+    use super::{draw_diagnostics, draw_overview, format_uptime, parse_check_line, run_windows_checks, scan_assessment, write_scan_log, App, CheckResult, Color};
     use ratatui::{backend::TestBackend, Terminal};
     use std::fs;
 
@@ -731,6 +766,26 @@ mod tests {
     }
 
 
+    #[test]
+    fn overview_renders_system_inventory_without_panicking() {
+        let app = App::new();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal.draw(|frame| draw_overview(frame, &app, frame.area()))
+            .expect("system overview should render");
+        let rendered = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect::<String>();
+        assert!(rendered.contains("System"));
+        assert!(rendered.contains("CPU:"));
+        assert!(rendered.contains("Memory:"));
+        assert!(rendered.contains("Uptime:"));
+    }
+
+    #[test]
+    fn uptime_format_is_compact_and_readable() {
+        assert_eq!(format_uptime(59), "0m");
+        assert_eq!(format_uptime(3_661), "1h 1m");
+        assert_eq!(format_uptime(90_061), "1d 1h 1m");
+    }
     #[test]
     fn scan_assessment_prioritizes_critical_and_reports_partial_results() {
         let warning = CheckResult {

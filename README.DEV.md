@@ -92,3 +92,11 @@ Never forget the GitHub synchronization step. If authentication/network prevents
 - Kept navigation shortcuts visible and concise; the Diagnostics panel also shows the scan shortcut and read-only caveat.
 - Added assessment-priority tests and a Ratatui TestBackend render test for initial and completed diagnostics states.
 - Verification for this UI change: 8 tests passed (including assessment priority and TestBackend rendering), cargo check, cargo build --release and git diff --check succeeded.
+## Current work: expanded System overview and Windows application icon
+
+- Expanded the Overview > System panel with full OS version, kernel version, architecture, CPU brand, physical and logical core counts, reported maximum CPU frequency, used/total RAM, uptime, and mounted-volume count/capacity/free space.
+- The panel uses live data from sysinfo and the already-refreshed disk inventory; values are informational and are not interpreted as a health verdict.
+- Added an uptime formatter and Ratatui TestBackend coverage for the expanded System panel.
+- Added a multi-resolution `icon.ico` derived from the user's existing `icon.png` asset, plus `app.rc` and `build.rs` to embed it into Windows executables using the Windows SDK resource compiler. Non-Windows targets skip the Windows resource step.
+- Keep the original untracked `icon.png` in the working directory; the app build consumes the committed `.ico` resource and does not alter the original PNG.
+- Verification: 10 tests passed, including the live six-check Windows smoke test; cargo check and release build succeeded. `git diff --check` must pass before commit.

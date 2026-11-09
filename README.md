@@ -8,7 +8,7 @@ SystemWatch is an interactive terminal application for inspecting a Windows PC, 
 
 The early preview (0.1.0) currently provides:
 
-- **System overview:** Windows version, computer name, CPU load and physical memory usage.
+- **System overview:** computer name, full Windows version and kernel, CPU model, physical/logical core counts, reported CPU frequency, live memory use, system uptime, processor architecture and mounted-volume capacity/free space.
 - **Storage inventory:** mounted volumes, filesystem types, used and total capacity.
 - **Device diagnostics:** checks Plug and Play devices for reported Device Manager problem codes.
 - **Microsoft Defender:** reads the real-time protection status.
@@ -88,3 +88,6 @@ After each completed scan, SystemWatch saves a detailed local log beside the run
 Each check includes its status, source, summary and detailed findings returned by Windows. The report includes an overall assessment, a concise attention list, status totals, total scan duration, and the duration of each individual check. Unsupported or failed queries remain explicitly marked as unavailable.
 
 Reports may contain the current Windows account name, computer name, hardware identifiers, device and service names, and event metadata. Review the file before sharing it.
+## Application icon
+
+The Windows executable embeds the project's supplied artwork as its application icon. The multi-resolution icon resource is compiled into Windows builds when the Windows SDK resource compiler is available; otherwise the build continues with the default executable icon. The terminal UI itself remains text-based.
