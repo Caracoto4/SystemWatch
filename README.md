@@ -13,10 +13,13 @@ The early preview (0.1.0) currently provides:
 - **Device diagnostics:** checks Plug and Play devices for reported Device Manager problem codes.
 - **Microsoft Defender:** reads the real-time protection status.
 - **Windows Firewall:** checks whether the returned firewall profiles are enabled.
+- **Windows Services:** flags only stopped automatic services that also report a non-zero exit code; trigger-start services are not treated as failures.
+- **Detailed scan logs:** creates a timestamped log file beside the running executable after each completed scan.
+  Logs stay local and may contain the computer name, OS details, and device or service names. Review a log before sharing it.
 - **Windows Event Log:** counts Critical and Error events in the System and Application logs over the last 24 hours (sample capped at 501 per log; event message text is not displayed).
 - **Interactive terminal UI:** four sections, live inventory refresh, and a manual diagnostics scan.
 
-The diagnostics section runs in the background, so the terminal interface remains responsive. It reports each check as **HEALTHY**, **WARNING**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
+The diagnostics section runs in the background, so the terminal interface remains responsive. PowerShell output is decoded as UTF-8 for readable error messages. It reports each check as **HEALTHY**, **WARNING**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
 
 ## Preview
 
@@ -75,7 +78,7 @@ Some future diagnostics may require administrator permissions. The app will expl
 
 - Windows integrity and servicing state
 - Disk health, SMART indicators and filesystem information
-- Windows services and deeper event-log analysis
+- Deeper event-log analysis
 - Network adapters, DNS, routes and connectivity
 - Hardware sensor and WHEA indicators
 - Detailed driver inventory
