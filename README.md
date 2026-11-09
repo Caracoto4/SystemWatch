@@ -18,9 +18,9 @@ The early preview (0.1.0) currently provides:
   Logs stay local and may contain the computer name, OS details, and device or service names. Review a log before sharing it.
 - **Windows Event Log:** counts Critical and Error events in the System and Application logs over the last 24 hours (sample capped at 501 per log; event message text is not displayed).
 - **Physical disk health:** reads Windows Storage health and operational status for detected physical disks, and displays temperature/wear telemetry only when the device exposes it. Unsupported or unavailable health data is reported as unavailable rather than assumed healthy.
-- **Interactive terminal UI:** four sections, live inventory refresh, and a manual diagnostics scan.
+- **Interactive terminal UI:** four sections, live inventory refresh, and a manual diagnostics scan. The Diagnostics view presents a compact status summary, color-coded check results, per-check timing, scan elapsed time and report-save status.
 
-The diagnostics section runs in the background, so the terminal interface remains responsive. PowerShell output is decoded as UTF-8 for readable error messages. It reports each check as **HEALTHY**, **WARNING**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
+The diagnostics section runs in the background, so the terminal interface remains responsive. While a scan runs, the view shows an elapsed-time indicator without inventing a percentage. Completed scans show status totals and a scoped overall assessment. PowerShell output is decoded as UTF-8 for readable error messages. It reports each check as **HEALTHY**, **WARNING**, **CRITICAL**, or **UNAVAILABLE**. A result that could not be read is never treated as a successful check.
 
 ## Preview
 

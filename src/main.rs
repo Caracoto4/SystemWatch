@@ -34,7 +34,8 @@ struct App {
     os: String,
     findings: Vec<String>,
     checks: Vec<CheckResult>,
-    scan_completed: Option<Instant>,
+    scan_started_elapsed: Option<Instant>,
+    scan_duration_ms: Option<u64>,
     scan_running: bool,
     scan_receiver: Option<Receiver<Vec<CheckResult>>>,
     scan_started_at: Option<chrono::DateTime<chrono::Local>>,
@@ -67,7 +68,8 @@ impl App {
                 "Live inventory is informational; it is not a full health verdict.".into(),
             ],
             checks: Vec::new(),
-            scan_completed: None,
+            scan_started_elapsed: None,
+            scan_duration_ms: None,
             scan_running: false,
             scan_receiver: None,
             scan_started_at: None,
@@ -87,6 +89,8 @@ impl App {
             return;
         }
         self.scan_started_at = Some(chrono::Local::now());
+        self.scan_started_elapsed = Some(Instant::now());
+        self.scan_duration_ms = None;
         self.scan_log_path = None;
         self.scan_log_error = None;
         let (sender, receiver) = mpsc::channel();
@@ -101,6 +105,7 @@ impl App {
         if let Err(error) = spawn_result {
             self.scan_running = false;
             self.scan_receiver = None;
+            self.scan_duration_ms = self.scan_started_elapsed.take().map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64);
             self.checks = vec![CheckResult {
                 name: "Diagnostics worker".into(),
                 status: "UNAVAILABLE".into(),
@@ -129,12 +134,13 @@ impl App {
                         Err(error) => self.scan_log_error = Some(format!("{error:#}")),
                     }
                 }
+                self.scan_duration_ms = self.scan_started_elapsed.take().map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64);
                 self.checks = results;
-                self.scan_completed = Some(Instant::now());
                 self.scan_running = false;
                 self.scan_receiver = None;
             }
             Some(None) => {
+                self.scan_duration_ms = self.scan_started_elapsed.take().map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64);
                 self.checks = vec![CheckResult {
                     name: "Diagnostics worker".into(),
                     status: "UNAVAILABLE".into(),
@@ -502,54 +508,136 @@ fn status_color(status: &str) -> Color {
     }
 }
 
-fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Read-only Windows checks",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(if app.scan_running { "Scan is running in the background; the interface remains responsive." } else { "Press S to run the checks. They run in the background." }),
-        Line::from(""),
-    ];
-    if app.checks.is_empty() {
-        lines.push(Line::from(if app.scan_running { "Diagnostics are running..." } else { "No diagnostic scan has been run in this session." }));
-        lines.push(Line::from(""));
-        lines.push(Line::from("Checks available in this preview:"));
-        lines.push(Line::from("  • Plug and Play device problem codes"));
-        lines.push(Line::from("  • Microsoft Defender real-time protection status"));
-        lines.push(Line::from("  • Windows Firewall profile status"));
-        lines.push(Line::from("  • Windows services with non-zero failure codes"));
-        lines.push(Line::from("  • System and Application critical/error event counts (24h)"));
+fn scan_assessment(checks: &[CheckResult]) -> (&'static str, Color) {
+    if checks.is_empty() {
+        ("NOT RUN", Color::DarkGray)
+    } else if checks.iter().any(|check| check.status == "CRITICAL") {
+        ("ATTENTION REQUIRED", Color::Red)
+    } else if checks.iter().any(|check| check.status == "WARNING") {
+        ("REVIEW RECOMMENDED", Color::Yellow)
+    } else if checks.iter().any(|check| check.status == "UNAVAILABLE") {
+        ("PARTIAL RESULTS", Color::DarkGray)
     } else {
-        for check in &app.checks {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", check.status),
-                    Style::default().fg(status_color(&check.status)).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(check.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
-            ]));
-            lines.push(Line::from(format!("  {}", check.detail)));
-            lines.push(Line::from(format!("  Duration: {} ms", check.duration_ms)));
-            lines.push(Line::from(""));
-        }
-        if let Some(done) = app.scan_completed {
-            lines.push(Line::from(format!("Scan completed {:.0}s ago.", done.elapsed().as_secs_f32())));
-        }
-        if let Some(path) = &app.scan_log_path {
-            lines.push(Line::from(format!("Detailed log saved: {}", path.display())));
-        }
-        if let Some(error) = &app.scan_log_error {
-            lines.push(Line::from(format!("Could not save scan log: {error}")));
-        }
+        ("NO ISSUES REPORTED", Color::Green)
     }
-    lines.push(Line::from(""));
-    lines.push(Line::from("Unavailable means the check could not produce a result; it does not mean healthy."));
+}
+
+fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(7), Constraint::Length(3)])
+        .split(area);
+
+    let (assessment, assessment_color) = scan_assessment(&app.checks);
+    let healthy = app.checks.iter().filter(|check| check.status == "HEALTHY").count();
+    let warning = app.checks.iter().filter(|check| check.status == "WARNING").count();
+    let critical = app.checks.iter().filter(|check| check.status == "CRITICAL").count();
+    let unavailable = app.checks.iter().filter(|check| check.status == "UNAVAILABLE").count();
+
+    let state = if app.scan_running {
+        let elapsed = app.scan_started_elapsed.map(|started| started.elapsed()).unwrap_or_default();
+        let spinner = ['|', '/', '-', '\\'][(elapsed.as_millis() / 180 % 4) as usize];
+        format!("{} SCANNING  ·  {:.1}s elapsed", spinner, elapsed.as_secs_f32())
+    } else if app.checks.is_empty() {
+        "READY  ·  Press S to start a diagnostic scan".to_string()
+    } else {
+        format!("COMPLETED  ·  {} checks", app.checks.len())
+    };
+
+    let total_time = if app.scan_running {
+        app.scan_started_elapsed.map(|started| started.elapsed().as_millis() as u64)
+    } else {
+        app.scan_duration_ms
+    };
+    let duration_label = total_time
+        .map(|ms| format!("{}.{:03}s", ms / 1000, ms % 1000))
+        .unwrap_or_else(|| "—".to_string());
+
+    let summary = vec![
+        Line::from(vec![
+            Span::styled(
+                format!(" {} ", state),
+                Style::default().fg(if app.scan_running { Color::Cyan } else { assessment_color }).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(assessment, Style::default().fg(assessment_color).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("  {} ", healthy), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("healthy   "),
+            Span::styled(format!("{} ", warning), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("warning   "),
+            Span::styled(format!("{} ", critical), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("critical   "),
+            Span::styled(format!("{} ", unavailable), Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("unavailable   ·   Total time: {duration_label}")),
+        ]),
+    ];
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title(" Diagnostics "))
+        Paragraph::new(summary)
+            .block(Block::default().borders(Borders::ALL).title(" SCAN OVERVIEW ")),
+        sections[0],
+    );
+
+    if app.checks.is_empty() {
+        let empty = if app.scan_running {
+            vec![
+                Line::from(Span::styled("Diagnostics are running", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+                Line::from("SystemWatch is collecting results in the background. The interface remains responsive."),
+                Line::from("This scan is read-only; no Windows settings are changed."),
+            ]
+        } else {
+            vec![
+                Line::from(Span::styled("No scan results yet", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD))),
+                Line::from("Press S to inspect devices, Defender, Firewall, services, event logs and physical disk health."),
+                Line::from("A concise summary and detailed local report will appear here after the scan."),
+            ]
+        };
+        frame.render_widget(
+            Paragraph::new(empty)
+                .block(Block::default().borders(Borders::ALL).title(" CHECK RESULTS ")),
+            sections[1],
+        );
+    } else {
+        let items: Vec<ListItem> = app.checks.iter().map(|check| {
+            let color = status_color(&check.status);
+            let detail: String = check.detail.chars().take(58).collect();
+            let detail = if check.detail.chars().count() > 58 {
+                format!("{detail}…")
+            } else {
+                detail
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", check.status),
+                    Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(check.name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  {detail}"), Style::default().fg(Color::Gray)),
+                Span::styled(format!("  ·  {} ms", check.duration_ms), Style::default().fg(Color::DarkGray)),
+            ]))
+        }).collect();
+
+        frame.render_widget(
+            List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(" CHECK RESULTS ")),
+            sections[1],
+        );
+    }
+
+    let footer = if let Some(path) = &app.scan_log_path {
+        format!("REPORT SAVED  ·  {}", path.file_name().and_then(|name| name.to_str()).unwrap_or("diagnostic log"))
+    } else if let Some(error) = &app.scan_log_error {
+        format!("REPORT SAVE FAILED  ·  {error}")
+    } else {
+        "Read-only diagnostics  ·  Unavailable checks are not treated as healthy  ·  S: scan".to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(footer)
+            .block(Block::default().borders(Borders::ALL).title(" REPORT "))
             .wrap(Wrap { trim: true }),
-        area,
+        sections[2],
     );
 }
 
@@ -617,7 +705,8 @@ fn draw_about(frame: &mut Frame, area: Rect) {
 }
 #[cfg(test)]
 mod tests {
-    use super::{parse_check_line, run_windows_checks, write_scan_log, CheckResult};
+    use super::{draw_diagnostics, parse_check_line, run_windows_checks, scan_assessment, write_scan_log, App, CheckResult, Color};
+    use ratatui::{backend::TestBackend, Terminal};
     use std::fs;
 
     #[test]
@@ -641,6 +730,72 @@ mod tests {
         assert_eq!(result.status, "UNAVAILABLE");
     }
 
+
+    #[test]
+    fn scan_assessment_prioritizes_critical_and_reports_partial_results() {
+        let warning = CheckResult {
+            name: "Warning".into(),
+            status: "WARNING".into(),
+            detail: "Review".into(),
+            evidence: Vec::new(),
+            duration_ms: 1,
+        };
+        let unavailable = CheckResult {
+            name: "Unavailable".into(),
+            status: "UNAVAILABLE".into(),
+            detail: "Not supported".into(),
+            evidence: Vec::new(),
+            duration_ms: 1,
+        };
+        let critical = CheckResult {
+            name: "Critical".into(),
+            status: "CRITICAL".into(),
+            detail: "Attention".into(),
+            evidence: Vec::new(),
+            duration_ms: 1,
+        };
+
+        assert_eq!(scan_assessment(&[]), ("NOT RUN", Color::DarkGray));
+        let healthy = CheckResult { name: "Healthy".into(), status: "HEALTHY".into(), detail: "Clear".into(), evidence: Vec::new(), duration_ms: 1 };
+        assert_eq!(scan_assessment(&[healthy]), ("NO ISSUES REPORTED", Color::Green));
+        assert_eq!(scan_assessment(&[unavailable.clone()]), ("PARTIAL RESULTS", Color::DarkGray));
+        assert_eq!(scan_assessment(&[warning.clone(), unavailable.clone()]), ("REVIEW RECOMMENDED", Color::Yellow));
+        assert_eq!(scan_assessment(&[warning, unavailable, critical]), ("ATTENTION REQUIRED", Color::Red));
+    }
+
+    #[test]
+    fn diagnostics_view_renders_initial_and_completed_states() {
+        let mut app = App::new();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
+        terminal.draw(|frame| draw_diagnostics(frame, &app, frame.area()))
+            .expect("empty diagnostics view should render");
+        app.scan_running = true;
+        app.scan_started_elapsed = Some(std::time::Instant::now());
+        terminal.draw(|frame| draw_diagnostics(frame, &app, frame.area()))
+            .expect("running diagnostics view should render");
+        app.scan_running = false;
+
+        app.checks = vec![
+            CheckResult {
+                name: "Example healthy check".into(),
+                status: "HEALTHY".into(),
+                detail: "No issues reported".into(),
+                evidence: Vec::new(),
+                duration_ms: 12,
+            },
+            CheckResult {
+                name: "Example warning check".into(),
+                status: "WARNING".into(),
+                detail: "Review recommended".into(),
+                evidence: Vec::new(),
+                duration_ms: 34,
+            },
+        ];
+        app.scan_duration_ms = Some(46);
+        terminal.draw(|frame| draw_diagnostics(frame, &app, frame.area()))
+            .expect("completed diagnostics view should render");
+    }
 
     #[test]
     fn writes_detailed_scan_log_next_to_executable() {

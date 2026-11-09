@@ -81,3 +81,14 @@ Never forget the GitHub synchronization step. If authentication/network prevents
 - Each individual check records its duration in milliseconds alongside source and result.
 - The wording is deliberately scoped: a clean summary means only that the available checks did not report an issue; it is not a guarantee that the PC is healthy.
 - Tests assert that overall assessment, attention list and per-check timing are present in the generated report.
+
+## Current work: professional Diagnostics TUI
+
+- Replaced the long unstructured diagnostics text dump with three focused regions: scan overview, check results and report status.
+- The overview displays the current scan state, elapsed/total duration, an overall assessment and counts for HEALTHY, WARNING, CRITICAL and UNAVAILABLE.
+- Each check is a compact color-coded row with its status, name, shortened summary and execution time. The complete evidence remains in the detailed local log.
+- During execution the UI displays a small elapsed-time spinner. It intentionally does not show a fabricated percentage because the current worker returns results as a completed batch rather than exposing per-check progress.
+- The report area displays the saved log filename or a clear save failure message.
+- Kept navigation shortcuts visible and concise; the Diagnostics panel also shows the scan shortcut and read-only caveat.
+- Added assessment-priority tests and a Ratatui TestBackend render test for initial and completed diagnostics states.
+- Verification for this UI change: 8 tests passed (including assessment priority and TestBackend rendering), cargo check, cargo build --release and git diff --check succeeded.
