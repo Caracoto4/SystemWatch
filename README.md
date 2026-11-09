@@ -23,23 +23,7 @@ The diagnostics section runs in the background, so the terminal interface remain
 
 ## Preview
 
-```text
-┌──────────────────────────────────────────────────────────────────┐
-│ SYSTEMWATCH   1: Overview   2: Diagnostics   3: Storage   4: About│
-│                                                                  │
-│ Read-only Windows checks                                        │
-│                                                                  │
-│ [HEALTHY] Devices & drivers                                      │
-│   No device problem codes reported                               │
-│                                                                  │
-│ [HEALTHY] Microsoft Defender                                     │
-│   Real-time protection is enabled                                │
-│                                                                  │
-│ [HEALTHY] Windows Firewall                                       │
-│   All returned firewall profiles are enabled                     │
-└──────────────────────────────────────────────────────────────────┘
-```
-<sub>Illustrative example only. Your computer may return different results or mark a check unavailable.</sub>
+![SystemWatch terminal interface](preview.png)
 
 ## Run
 
