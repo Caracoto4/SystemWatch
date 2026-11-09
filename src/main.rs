@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::{io, process::Command, time::{Duration, Instant}};
+use std::{io, process::Command, sync::mpsc::{self, Receiver, TryRecvError}, thread, time::{Duration, Instant}};
 use sysinfo::{Disks, System};
 
 #[derive(Clone)]
@@ -34,6 +34,7 @@ struct App {
     checks: Vec<CheckResult>,
     scan_completed: Option<Instant>,
     scan_running: bool,
+    scan_receiver: Option<Receiver<Vec<CheckResult>>>,
 }
 
 impl App {
@@ -63,6 +64,7 @@ impl App {
             checks: Vec::new(),
             scan_completed: None,
             scan_running: false,
+            scan_receiver: None,
         }
     }
 
@@ -72,11 +74,57 @@ impl App {
         self.refreshed = Instant::now();
     }
 
-    fn run_scan(&mut self) {
+    fn start_scan(&mut self) {
+        if self.scan_running {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        self.scan_receiver = Some(receiver);
         self.scan_running = true;
-        self.checks = run_windows_checks();
-        self.scan_completed = Some(Instant::now());
-        self.scan_running = false;
+        let spawn_result = thread::Builder::new()
+            .name("systemwatch-diagnostics".into())
+            .spawn(move || {
+                let results = run_windows_checks();
+                let _ = sender.send(results);
+            });
+        if let Err(error) = spawn_result {
+            self.scan_running = false;
+            self.scan_receiver = None;
+            self.checks = vec![CheckResult {
+                name: "Diagnostics worker".into(),
+                status: "UNAVAILABLE".into(),
+                detail: format!("Could not start background scan: {error}"),
+            }];
+        }
+    }
+
+    fn poll_scan(&mut self) {
+        let received = match self.scan_receiver.as_ref() {
+            Some(receiver) => match receiver.try_recv() {
+                Ok(results) => Some(Some(results)),
+                Err(TryRecvError::Disconnected) => Some(None),
+                Err(TryRecvError::Empty) => None,
+            },
+            None => None,
+        };
+        match received {
+            Some(Some(results)) => {
+                self.checks = results;
+                self.scan_completed = Some(Instant::now());
+                self.scan_running = false;
+                self.scan_receiver = None;
+            }
+            Some(None) => {
+                self.checks = vec![CheckResult {
+                    name: "Diagnostics worker".into(),
+                    status: "UNAVAILABLE".into(),
+                    detail: "The background scan ended without returning results.".into(),
+                }];
+                self.scan_running = false;
+                self.scan_receiver = None;
+            }
+            None => {}
+        }
     }
 
     fn cpu_usage(&self) -> f32 {
@@ -139,10 +187,12 @@ fn run_windows_checks() -> Vec<CheckResult> {
     let defender = r#"$ErrorActionPreference='Stop'; try { $s=Get-MpComputerStatus; if($s.RealTimeProtectionEnabled){ 'HEALTHY|Real-time protection is enabled|Microsoft Defender status' } else { 'WARNING|Real-time protection is reported disabled|Microsoft Defender status' } } catch { 'UNAVAILABLE|Defender status could not be read|' + $_.Exception.Message }"#;
     let firewall = r#"$ErrorActionPreference='Stop'; try { $p=@(Get-NetFirewallProfile); if($p.Count -eq 0){ 'UNAVAILABLE|No firewall profiles returned|' } else { $off=@($p | Where-Object { -not $_.Enabled }); if($off.Count -eq 0){ 'HEALTHY|All returned firewall profiles are enabled|Domain, Private and Public profiles' } else { $names=($off | ForEach-Object { $_.Name }) -join ', '; 'WARNING|{0} firewall profile(s) are disabled|{1}' -f $off.Count,$names } } } catch { 'UNAVAILABLE|Firewall status could not be read|' + $_.Exception.Message }"#;
 
+    let event_log = r#"$ErrorActionPreference='Stop'; try { $since=(Get-Date).AddHours(-24); $all=@(); foreach($log in @('System','Application')) { try { $items=@(Get-WinEvent -FilterHashtable @{LogName=$log; Level=1,2; StartTime=$since} -MaxEvents 501 -ErrorAction Stop); $all += $items | ForEach-Object { [pscustomobject]@{ Log=$log; Level=$_.Level } } } catch { if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { throw } } }; $count=$all.Count; if($count -eq 0){ 'HEALTHY|No critical or error events found in the queried 24-hour window|System and Application logs' } else { $sys=@($all | Where-Object {$_.Log -eq 'System'}).Count; $app=@($all | Where-Object {$_.Log -eq 'Application'}).Count; $capped=($sys -ge 501 -or $app -ge 501); if($capped){ 'WARNING|At least {0} critical/error event(s) in the last 24 hours (sample capped per log)|System: {1}; Application: {2}' -f $count,$sys,$app } else { 'WARNING|{0} critical/error event(s) in the last 24 hours|System: {1}; Application: {2}' -f $count,$sys,$app } } } catch { 'UNAVAILABLE|Windows event logs could not be queried|' + $_.Exception.Message } }"#;
     vec![
         powershell_check("Devices & drivers", devices),
         powershell_check("Microsoft Defender", defender),
         powershell_check("Windows Firewall", firewall),
+        powershell_check("Windows Event Log (24h)", event_log),
     ]
 }
 
@@ -182,11 +232,12 @@ fn main() -> Result<()> {
                     KeyCode::Char('3') => app.tab = 2,
                     KeyCode::Char('4') => app.tab = 3,
                     KeyCode::Char('r') => app.refresh(),
-                    KeyCode::Char('s' | 'S') if app.tab == 1 => app.run_scan(),
+                    KeyCode::Char('s' | 'S') if app.tab == 1 => app.start_scan(),
                     _ => {}
                 }
             }
         }
+        app.poll_scan();
         if app.refreshed.elapsed() >= Duration::from_secs(2) {
             app.refresh();
         }
@@ -296,16 +347,17 @@ fn draw_diagnostics(frame: &mut Frame, app: &App, area: Rect) {
             "Read-only Windows checks",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )),
-        Line::from("Press S to run the checks. They may take a few seconds."),
+        Line::from(if app.scan_running { "Scan is running in the background; the interface remains responsive." } else { "Press S to run the checks. They run in the background." }),
         Line::from(""),
     ];
     if app.checks.is_empty() {
-        lines.push(Line::from("No diagnostic scan has been run in this session."));
+        lines.push(Line::from(if app.scan_running { "Diagnostics are running..." } else { "No diagnostic scan has been run in this session." }));
         lines.push(Line::from(""));
         lines.push(Line::from("Checks available in this preview:"));
         lines.push(Line::from("  • Plug and Play device problem codes"));
         lines.push(Line::from("  • Microsoft Defender real-time protection status"));
         lines.push(Line::from("  • Windows Firewall profile status"));
+        lines.push(Line::from("  • System and Application critical/error event counts (24h)"));
     } else {
         for check in &app.checks {
             lines.push(Line::from(vec![
@@ -379,7 +431,7 @@ fn draw_about(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("A portable, read-only Windows diagnostic toolkit."),
         Line::from(""),
-        Line::from("This preview reads basic OS, CPU, memory, volume and selected security/device status."),
+        Line::from("This preview reads basic OS, CPU, memory, volume, security/device status and selected event-log counters."),
         Line::from("It does not repair, delete, disable, or modify system settings."),
         Line::from(""),
         Line::from("Some checks may require administrator rights or may not exist on every Windows version."),
